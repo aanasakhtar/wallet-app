@@ -1,0 +1,60 @@
+# Filebeat configuration for the NO-DOCKER setup.
+#
+# The app writes one JSON object per line to logs/wallet-app.json. Filebeat
+# tails that file, decodes each line into real fields, and ships the result
+# to Elasticsearch. Because the app already emits structured JSON, no grok
+# or dissect parsing is required.
+#
+# For the Docker Compose setup use filebeat.docker.yml instead, which reads
+# container logs from the Docker json-file driver.
+
+filebeat.inputs:
+  - type: filestream
+    id: wallet-app-logs
+    enabled: true
+    paths:
+      # IMPORTANT: change this to the absolute path of your logs directory.
+      # Filebeat does not expand ~ or resolve relative paths the way a shell does.
+      - /absolute/path/to/wallet-app/logs/wallet-app.json
+
+    parsers:
+      # Each line is a complete JSON object produced by app/logging_config.py.
+      - ndjson:
+          target: "" # promote decoded keys to the top level of the document
+          add_error_key: true # if a line is not valid JSON, tag it rather than drop it
+          overwrite_keys: true # our @timestamp wins over Filebeat's ingest time
+
+processors:
+  # Drop Filebeat's own noisy host/agent metadata. Keeping documents small
+  # makes the Kibana Discover view readable; re-enable if you want host info.
+  - drop_fields:
+      fields: ["agent", "ecs", "input", "host.os", "log.offset"]
+      ignore_missing: true
+
+  # Give every document a constant field identifying where it came from.
+  - add_fields:
+      target: ""
+      fields:
+        pipeline: filebeat-file-input
+
+output.elasticsearch:
+  hosts: ["http://localhost:9200"]
+  index: "wallet-logs-%{+yyyy.MM.dd}"
+
+# A custom index name requires an explicit template, otherwise Filebeat
+# refuses to start.
+setup.template.name: "wallet-logs"
+setup.template.pattern: "wallet-logs-*"
+setup.ilm.enabled: false
+
+# Kibana connection, so `filebeat setup` can create the index pattern.
+setup.kibana:
+  host: "http://localhost:5601"
+
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: ./filebeat-logs
+  name: filebeat
+  keepfiles: 3
+  permissions: 0644

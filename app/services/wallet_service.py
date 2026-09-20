@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import models, metrics
 from ..logging_config import app_logger
 
 
@@ -12,7 +12,10 @@ def get_wallet_for_user(db: Session, user: models.User) -> models.Wallet:
     wallet = db.query(models.Wallet).filter(models.Wallet.user_id == user.id).first()
     if wallet is None:
         # Should never happen since signup always creates one, but fail loudly if it does.
-        app_logger.error("No wallet found for user_id=%s", user.id)
+        app_logger.error(
+            "No wallet found for user",
+            extra={"event": "wallet_missing", "user_id": user.id},
+        )
         raise WalletError("Wallet not found for user")
     return wallet
 
@@ -32,5 +35,16 @@ def topup(db: Session, user: models.User, amount: float) -> models.Transaction:
     db.commit()
     db.refresh(txn)
 
-    app_logger.info("Top-up completed: wallet_id=%s amount=%.2f", wallet.id, amount)
+    metrics.transactions_total.labels(type="topup", status="completed").inc()
+    metrics.refresh_business_gauges(db)
+
+    app_logger.info(
+        "Top-up completed",
+        extra={
+            "event": "topup_completed",
+            "wallet_id": wallet.id,
+            "transaction_id": txn.id,
+            "amount": amount,
+        },
+    )
     return txn

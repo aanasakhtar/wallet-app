@@ -1,0 +1,53 @@
+# Filebeat configuration for the DOCKER COMPOSE setup.
+#
+# Pipeline: app writes JSON to stdout -> Docker's json-file driver saves it
+# under /var/lib/docker/containers/<id>/<id>-json.log -> Filebeat reads it,
+# unwraps Docker's envelope, decodes our JSON, and ships to Elasticsearch.
+#
+# Docker wraps each line as {"log":"<our json>\n","stream":"stdout","time":...}
+# so there are TWO decode steps: container input unwraps the envelope, then
+# decode_json_fields parses the application payload inside `message`.
+
+filebeat.inputs:
+  - type: container
+    enabled: true
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    stream: stdout
+
+processors:
+  # Only keep logs from the wallet app container; skip Prometheus, Grafana, etc.
+  - drop_event:
+      when:
+        not:
+          contains:
+            container.image.name: wallet
+
+  # Parse the application's JSON payload out of the `message` field.
+  - decode_json_fields:
+      fields: ["message"]
+      target: ""
+      overwrite_keys: true
+      add_error_key: true
+
+  - drop_fields:
+      fields: ["agent", "ecs", "input", "host.os", "log.offset", "stream"]
+      ignore_missing: true
+
+  - add_fields:
+      target: ""
+      fields:
+        pipeline: filebeat-docker-input
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  index: "wallet-logs-%{+yyyy.MM.dd}"
+
+setup.template.name: "wallet-logs"
+setup.template.pattern: "wallet-logs-*"
+setup.ilm.enabled: false
+
+setup.kibana:
+  host: "http://kibana:5601"
+
+logging.level: info

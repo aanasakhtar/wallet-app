@@ -3,3 +3,11 @@ __pycache__/
 .venv/
 *.db
 .env
+
+# Runtime output - excluded per the assignment's "exclude downloaded
+# dependencies and data volumes" instruction
+logs/
+test_logs/
+stack/
+filebeat-logs/
+.kilo

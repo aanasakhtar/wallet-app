@@ -1,3 +1,15 @@
+# Full observability stack. Anyone with Docker can run the whole assignment
+# with `docker compose up --build`.
+#
+# Ports:
+#   8000 wallet app    8001 cardinality demo   9090 prometheus
+#   9100 node exporter 3000 grafana            9200 elasticsearch
+#   5601 kibana
+#
+# Memory note: Elasticsearch + Kibana + Grafana + Prometheus together want
+# roughly 4 GB of RAM. On a smaller machine, start the metrics profile and
+# the logging profile separately (see README).
+
 services:
   db:
     image: postgres:16
@@ -18,6 +30,7 @@ services:
 
   app:
     build: .
+    image: wallet-app:latest
     restart: unless-stopped
     depends_on:
       db:
@@ -25,11 +38,129 @@ services:
     environment:
       DATABASE_URL: postgresql://wallet:wallet@db:5432/wallet
       JWT_SECRET: change-me-in-production
+      ADMIN_TOKEN: local-admin-token
+      SERVICE_NAME: wallet-api
+      LOG_DIR: /code/logs
     ports:
       - "8000:8000"
+    volumes:
+      - app_logs:/code/logs
+    logging:
+      # Filebeat's container input reads these files. Rotation here is what
+      # bounds on-disk log size for the Docker path.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
-  # --- Phase 2 will add here: prometheus, grafana, node-exporter,
-  #     filebeat, elasticsearch, kibana ---
+  cardinality-demo:
+    build: .
+    image: wallet-app:latest
+    restart: unless-stopped
+    command: python -m uvicorn cardinality_demo:app --host 0.0.0.0 --port 8001
+    environment:
+      CARDINALITY_MODE: "on" # set to "off" for the bounded-label comparison
+      MAX_UNIQUE_IDS: "100"
+    ports:
+      - "8001:8001"
+
+  # --------------------------------------------------------------------- #
+  # Metrics
+  # --------------------------------------------------------------------- #
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # Retention: metrics older than 15 days are deleted automatically.
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./observability/prometheus/prometheus.docker.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    ports:
+      - "9100:9100"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning/datasources/datasource.docker.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ./observability/grafana/provisioning/dashboards/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+
+  # --------------------------------------------------------------------- #
+  # Logging
+  # --------------------------------------------------------------------- #
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.0
+    restart: unless-stopped
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.15.0
+    restart: unless-stopped
+    user: root
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    command: ["filebeat", "-e", "-strict.perms=false"]
+    volumes:
+      - ./observability/filebeat/filebeat.docker.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - filebeat_data:/usr/share/filebeat/data
 
 volumes:
   db_data:
+  app_logs:
+  prom_data:
+  grafana_data:
+  es_data:
+  filebeat_data:

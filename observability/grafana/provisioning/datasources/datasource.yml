@@ -1,0 +1,24 @@
+# Auto-provisions Prometheus as a data source so the dashboard works on
+# first launch without clicking through the UI.
+#
+# Local (no Docker): copy this file to Grafana's provisioning directory,
+#   e.g. <grafana>/conf/provisioning/datasources/datasource.yml
+#   and change the URL to http://localhost:9090
+# Docker Compose: mounted automatically, and `prometheus` resolves via the
+#   compose network.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus-main
+    type: prometheus
+    access: proxy
+    url: http://localhost:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      # Should match (or exceed) prometheus.yml's scrape_interval so Grafana
+      # doesn't request finer resolution than the data actually has.
+      timeInterval: 5s
+      httpMethod: POST

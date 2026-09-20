@@ -1,0 +1,19 @@
+# Tells Grafana to load any dashboard JSON found in the mounted folder.
+#
+# Local (no Docker): copy to <grafana>/conf/provisioning/dashboards/ and set
+#   `path` to the absolute path of observability/grafana/dashboards.
+# Docker Compose: mounted automatically.
+
+apiVersion: 1
+
+providers:
+  - name: wallet-dashboards
+    orgId: 1
+    folder: Wallet App
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
