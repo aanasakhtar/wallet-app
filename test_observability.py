@@ -4,6 +4,7 @@ injection, and JSON log validity. Run with: python3 test_observability.py
 """
 import json
 import os
+import uuid
 import time
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_obs.db"
@@ -22,6 +23,11 @@ from app.main import app  # noqa: E402
 
 client = TestClient(app)
 ADMIN = {"X-Admin-Token": "test-token"}
+
+
+def idem(headers):
+    """POST /transfers requires an Idempotency-Key (Assignment 2); a fresh one per call."""
+    return {**headers, "Idempotency-Key": str(uuid.uuid4())}
 
 
 def expect(condition, message):
@@ -55,12 +61,12 @@ def main():
     alice, bob = setup_users()
 
     print("--- generate some traffic ---")
-    client.post("/wallet/topup", json={"amount": 5000}, headers=alice)
+    client.post("/wallet/topups", json={"amount": 5000}, headers=alice)
     for amount in (100, 250, 1200):
         client.post("/transfers", json={"recipient": "bob@example.com", "amount": amount},
-                    headers=alice)
+                    headers=idem(alice))
     client.post("/transfers", json={"recipient": "bob@example.com", "amount": 999999},
-                headers=alice)  # insufficient balance
+                headers=idem(alice))  # insufficient balance
     client.post("/auth/login", data={"username": "alice@example.com", "password": "wrong"})
     client.get("/wallet/balance", headers=bob)
     print("OK: traffic generated")
@@ -185,7 +191,7 @@ def main():
 
     print("\n--- request_id correlates logs to a single request ---")
     r = client.post("/transfers", json={"recipient": "bob@example.com", "amount": 25},
-                    headers=alice)
+                    headers=idem(alice))
     rid = r.headers["x-request-id"]
     with open(log_path, encoding="utf-8") as fh:
         matched = [json.loads(l) for l in fh if l.strip() and json.loads(l).get("request_id") == rid]

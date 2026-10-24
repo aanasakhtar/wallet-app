@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, String, Float, DateTime, ForeignKey
+from sqlalchemy import Column, String, Float, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import relationship
 
@@ -59,4 +59,22 @@ class Transaction(Base):
     amount = Column(Float, nullable=False)
     type = Column(SAEnum(TransactionType), nullable=False)
     status = Column(SAEnum(TransactionStatus), nullable=False, default=TransactionStatus.pending)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class IdempotencyKey(Base):
+    """Remembers which transfer an Idempotency-Key produced.
+
+    The row is inserted in the SAME database transaction as the money movement
+    (see transfer_service.execute_transfer), so a key can never exist without
+    its transfer and a transfer can never be committed without its key.
+    """
+    __tablename__ = "idempotency_keys"
+    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_idempotency_user_key"),)
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    key = Column(String, nullable=False)
+    request_hash = Column(String, nullable=False)
+    transaction_id = Column(String, ForeignKey("transactions.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -1,0 +1,719 @@
+openapi: 3.1.0
+info:
+  title: Wallet API
+  description: 'Peer-to-peer wallet: sign up, top up, send money, view history. All errors use one envelope:
+    `{"error": {code, message, request_id, details?}}`.'
+  version: 0.3.0
+servers:
+- url: http://localhost:8000
+  description: local
+paths:
+  /auth/signup:
+    post:
+      tags:
+      - auth
+      summary: Register a user and create their wallet
+      operationId: signup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignupRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserOut'
+        '409':
+          description: Conflict with current state (e.g. insufficient balance, duplicate registration)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Request failed validation (bad field, missing header, idempotency key reused with
+            a different body, self-transfer)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/login:
+    post:
+      tags:
+      - auth
+      summary: Exchange email + password for a bearer token
+      description: 'Form fields per the OAuth2 password flow: `username` is the account email.'
+      operationId: login
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Body_login'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Missing, invalid or expired bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Request failed validation (bad field, missing header, idempotency key reused with
+            a different body, self-transfer)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /wallet/balance:
+    get:
+      tags:
+      - wallet
+      summary: Current wallet balance
+      operationId: get_balance
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletOut'
+        '401':
+          description: Missing, invalid or expired bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - OAuth2PasswordBearer: []
+  /wallet/topups:
+    post:
+      tags:
+      - wallet
+      summary: Add money to your own wallet (simulated)
+      description: 'Creates a top-up transaction. Renamed from the verb-style `/wallet/topup`: the URL
+        names the collection, POST creates one member.'
+      operationId: create_topup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopupRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionOut'
+        '401':
+          description: Missing, invalid or expired bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Request failed validation (bad field, missing header, idempotency key reused with
+            a different body, self-transfer)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+      - OAuth2PasswordBearer: []
+  /transfers:
+    post:
+      tags:
+      - transfers
+      summary: Send money to another user
+      description: 'Moves `amount` from the caller''s wallet to the recipient''s.
+
+
+        **Idempotency:** the `Idempotency-Key` header is required. Repeating a request with the same key
+        and body returns the original transfer (201, `Idempotent-Replayed: true`) and moves no money.
+        The same key with a different body is a 422.
+
+
+        **Rate limit:** limited per user; excess calls get 429 with `Retry-After`.'
+      operationId: create_transfer
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{8,64}$
+          description: Client-generated unique key (a UUID is ideal), 8-64 chars of A-Z a-z 0-9 _ -
+          title: Idempotency-Key
+        description: Client-generated unique key (a UUID is ideal), 8-64 chars of A-Z a-z 0-9 _ -
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionOut'
+          headers:
+            Location:
+              description: URL of the created transfer
+              schema:
+                type: string
+            Idempotent-Replayed:
+              description: '`true` when this response is a replay of an earlier request'
+              schema:
+                type: string
+            RateLimit-Limit:
+              schema:
+                type: integer
+              description: Requests allowed per window
+            RateLimit-Remaining:
+              schema:
+                type: integer
+              description: Requests left in the window
+        '401':
+          description: Missing, invalid or expired bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict with current state (e.g. insufficient balance, duplicate registration)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Request failed validation (bad field, missing header, idempotency key reused with
+            a different body, self-transfer)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded; see the Retry-After header
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /transfers/{transfer_id}:
+    get:
+      tags:
+      - transfers
+      summary: Fetch one transfer you sent or received
+      operationId: get_transfer
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: transfer_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Transfer Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionOut'
+        '401':
+          description: Missing, invalid or expired bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /transactions:
+    get:
+      tags:
+      - transfers
+      summary: Your transaction history, newest first
+      operationId: list_transactions
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          description: Page size
+          default: 50
+          title: Limit
+        description: Page size
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: Rows to skip
+          default: 0
+          title: Offset
+        description: Rows to skip
+      - name: type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/TransactionType'
+          - type: 'null'
+          description: Filter by type
+          title: Type
+        description: Filter by type
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/TransactionStatus'
+          - type: 'null'
+          description: Filter by status
+          title: Status
+        description: Filter by status
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TransactionOut'
+                title: Response List Transactions
+        '401':
+          description: Missing, invalid or expired bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Request failed validation (bad field, missing header, idempotency key reused with
+            a different body, self-transfer)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /admin/faults:
+    get:
+      tags:
+      - admin
+      summary: Get Faults
+      operationId: get_faults
+      parameters:
+      - name: x-admin-token
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Admin-Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags:
+      - admin
+      summary: Set Faults
+      operationId: set_faults
+      parameters:
+      - name: x-admin-token
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Admin-Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FaultUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /admin/faults/reset:
+    post:
+      tags:
+      - admin
+      summary: Reset Faults
+      description: Single call that turns every injected fault off again.
+      operationId: reset_faults
+      parameters:
+      - name: x-admin-token
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Admin-Token
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /health:
+    get:
+      tags:
+      - health
+      summary: Liveness check
+      operationId: health
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /metrics:
+    get:
+      tags:
+      - observability
+      summary: Prometheus scrape target
+      operationId: metrics_endpoint
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            text/plain:
+              schema:
+                type: string
+components:
+  schemas:
+    Body_login:
+      properties:
+        grant_type:
+          anyOf:
+          - type: string
+            pattern: password
+          - type: 'null'
+          title: Grant Type
+        username:
+          type: string
+          title: Username
+        password:
+          type: string
+          title: Password
+        scope:
+          type: string
+          title: Scope
+          default: ''
+        client_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Client Id
+        client_secret:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Client Secret
+      type: object
+      required:
+      - username
+      - password
+      title: Body_login
+    ErrorDetail:
+      properties:
+        code:
+          type: string
+          title: Code
+          description: Stable machine-readable error code
+          examples:
+          - insufficient_balance
+        message:
+          type: string
+          title: Message
+          description: Human-readable explanation
+        request_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Request Id
+          description: Same value as the X-Request-ID response header; quote it when reporting a problem
+        details:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Details
+          description: Optional extra info, e.g. the list of invalid fields
+      type: object
+      required:
+      - code
+      - message
+      title: ErrorDetail
+    ErrorResponse:
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+      type: object
+      required:
+      - error
+      title: ErrorResponse
+    FaultUpdate:
+      properties:
+        latency_enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Latency Enabled
+        latency_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Latency Ms
+        latency_every_n:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Latency Every N
+        error_enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Error Enabled
+        error_every_n:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Error Every N
+      type: object
+      title: FaultUpdate
+    SignupRequest:
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Name
+        email:
+          type: string
+          format: email
+          title: Email
+        phone:
+          anyOf:
+          - type: string
+            pattern: ^\+?[0-9]{10,15}$
+          - type: 'null'
+          title: Phone
+          description: Digits with optional leading +, 10-15 digits
+        password:
+          type: string
+          maxLength: 72
+          minLength: 8
+          title: Password
+      additionalProperties: false
+      type: object
+      required:
+      - name
+      - email
+      - password
+      title: SignupRequest
+    TokenResponse:
+      properties:
+        access_token:
+          type: string
+          title: Access Token
+        token_type:
+          type: string
+          title: Token Type
+          default: bearer
+      type: object
+      required:
+      - access_token
+      title: TokenResponse
+    TopupRequest:
+      properties:
+        amount:
+          type: number
+          maximum: 1000000.0
+          exclusiveMinimum: 0.0
+          title: Amount
+          description: PKR, at most 2 decimal places
+      additionalProperties: false
+      type: object
+      required:
+      - amount
+      title: TopupRequest
+    TransactionOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        from_wallet_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: From Wallet Id
+        to_wallet_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: To Wallet Id
+        amount:
+          type: number
+          title: Amount
+        type:
+          $ref: '#/components/schemas/TransactionType'
+        status:
+          $ref: '#/components/schemas/TransactionStatus'
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - id
+      - from_wallet_id
+      - to_wallet_id
+      - amount
+      - type
+      - status
+      - created_at
+      title: TransactionOut
+    TransactionStatus:
+      type: string
+      enum:
+      - pending
+      - completed
+      - failed
+      title: TransactionStatus
+    TransactionType:
+      type: string
+      enum:
+      - topup
+      - transfer
+      - cashback
+      title: TransactionType
+    TransferRequest:
+      properties:
+        amount:
+          type: number
+          maximum: 1000000.0
+          exclusiveMinimum: 0.0
+          title: Amount
+          description: PKR, at most 2 decimal places
+        recipient:
+          type: string
+          maxLength: 254
+          minLength: 3
+          title: Recipient
+          description: Recipient's email address or phone number
+      additionalProperties: false
+      type: object
+      required:
+      - amount
+      - recipient
+      title: TransferRequest
+    UserOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        email:
+          type: string
+          format: email
+          title: Email
+        phone:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Phone
+      type: object
+      required:
+      - id
+      - name
+      - email
+      title: UserOut
+    WalletOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        balance:
+          type: number
+          title: Balance
+        currency:
+          type: string
+          title: Currency
+      type: object
+      required:
+      - id
+      - balance
+      - currency
+      title: WalletOut
+  securitySchemes:
+    OAuth2PasswordBearer:
+      type: oauth2
+      flows:
+        password:
+          scopes: {}
+          tokenUrl: /auth/login

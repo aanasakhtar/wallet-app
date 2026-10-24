@@ -1,0 +1,66 @@
+
+### HTTP POST /transfers - calls/s by status code
+  query: sum by (status_code) (rate(wallet_http_requests_total{method="POST",endpoint="/transfers"}[1m]))
+  -> {status_code=201} 2.325
+  -> {status_code=409} 0.7752
+  -> {status_code=404} 0.7752
+  -> {status_code=422} 0.7752
+
+### gRPC CreateTransfer - calls/s by method and status
+  query: sum by (grpc_method, grpc_code) (rate(wallet_grpc_server_handled_total[1m]))
+  -> {grpc_code=OK,grpc_method=/wallet.v1.TransferService/CreateTransfer} 1.64
+  -> {grpc_code=FAILED_PRECONDITION,grpc_method=/wallet.v1.TransferService/CreateTransfer} 0.56
+  -> {grpc_code=NOT_FOUND,grpc_method=/wallet.v1.TransferService/CreateTransfer} 0.56
+  -> {grpc_code=INVALID_ARGUMENT,grpc_method=/wallet.v1.TransferService/CreateTransfer} 0.56
+
+### HTTP: non-2xx share of calls (5m)
+  query: (sum(rate(wallet_http_requests_total{method="POST",endpoint="/transfers",status_code!~"2.."}[5m])) or vector(0)) / sum(rate(wallet_http_requests_total{method="POST",endpoint="/transfers"}[5m]))
+  -> {} 0.5
+
+### HTTP: server errors (5xx) share (5m)
+  query: (sum(rate(wallet_http_requests_total{method="POST",endpoint="/transfers",status_code=~"5.."}[5m])) or vector(0)) / sum(rate(wallet_http_requests_total{method="POST",endpoint="/transfers"}[5m]))
+  -> {} 0
+
+### gRPC: non-OK share of calls (5m)
+  query: (sum(rate(wallet_grpc_server_handled_total{grpc_code!="OK"}[5m])) or vector(0)) / sum(rate(wallet_grpc_server_handled_total[5m]))
+  -> {} 0.506
+
+### gRPC: server errors share (5m)
+  query: (sum(rate(wallet_grpc_server_handled_total{grpc_code=~"INTERNAL|UNKNOWN|UNAVAILABLE|DATA_LOSS"}[5m])) or vector(0)) / sum(rate(wallet_grpc_server_handled_total[5m]))
+  -> {} 0
+
+### HTTP POST /transfers - latency p50 / p95 (5m window)
+  query: histogram_quantile(0.50, sum by (le) (rate(wallet_http_request_duration_seconds_bucket{method="POST",endpoint="/transfers"}[5m])))
+  -> {} 0.005347
+  query: histogram_quantile(0.95, sum by (le) (rate(wallet_http_request_duration_seconds_bucket{method="POST",endpoint="/transfers"}[5m])))
+  -> {} 0.02086
+
+### gRPC CreateTransfer - latency p50 / p95 (5m window)
+  query: histogram_quantile(0.50, sum by (le) (rate(wallet_grpc_server_handling_seconds_bucket[5m])))
+  -> {} 0.005063
+  query: histogram_quantile(0.95, sum by (le) (rate(wallet_grpc_server_handling_seconds_bucket[5m])))
+  -> {} 0.009791
+
+### HTTP requests in progress (all endpoints)
+  query: sum(wallet_http_requests_in_progress)
+  -> {} 0
+
+### gRPC in-flight calls
+  query: sum by (grpc_method) (wallet_grpc_server_in_flight)
+  -> {grpc_method=/wallet.v1.TransferService/CreateTransfer} 0
+
+### Completed transfers/s by front end (job)
+  query: sum by (job) (rate(wallet_transactions_total{type="transfer",status="completed"}[1m]))
+  -> {job=wallet-app} 1.551
+  -> {job=wallet-grpc} 1.08
+
+### Idempotent replays / rate-limit rejections
+  query: sum(increase(wallet_idempotent_replays_total[$__range])) or vector(0)
+  -> {} 88.96
+  query: sum(increase(wallet_rate_limit_rejections_total[$__range])) or vector(0)
+  -> {} 0
+
+### Scrape health (up)
+  query: up{job=~"wallet-app|wallet-grpc"}
+  -> {env=local,instance=localhost:8000,job=wallet-app,service=wallet-api} 1
+  -> {env=local,instance=localhost:8002,job=wallet-grpc,service=wallet-grpc} 1

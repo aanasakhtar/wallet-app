@@ -45,11 +45,11 @@ echo "  wrote $RUN_DIR/prometheus.yml (nodename=$HOSTNAME_SHORT)"
 # Filebeat: absolute log path.
 # --------------------------------------------------------------------------
 echo "Configuring Filebeat..."
-sed "s|/absolute/path/to/wallet-app/logs/wallet-app.json|$PROJECT_DIR/logs/wallet-app.json|" \
+sed "s|/absolute/path/to/wallet-app/logs/wallet-\*.json|$PROJECT_DIR/logs/wallet-*.json|" \
   "$PROJECT_DIR/observability/filebeat/filebeat.yml" > "$RUN_DIR/filebeat.yml"
 # Filebeat refuses to start if its config is group/world writable.
 chmod go-w "$RUN_DIR/filebeat.yml"
-echo "  wrote $RUN_DIR/filebeat.yml (tailing $PROJECT_DIR/logs/wallet-app.json)"
+echo "  wrote $RUN_DIR/filebeat.yml (tailing $PROJECT_DIR/logs/wallet-*.json)"
 
 # --------------------------------------------------------------------------
 # Grafana: provisioning files with absolute dashboard path.

@@ -1,0 +1,31 @@
+# exact counter values (no rate/increase extrapolation) at 02:53:13
+gRPC calls by status:
+   {'grpc_code': 'OK'} 120
+   {'grpc_code': 'FAILED_PRECONDITION'} 40
+   {'grpc_code': 'NOT_FOUND'} 40
+   {'grpc_code': 'INVALID_ARGUMENT'} 40
+HTTP POST /transfers by status:
+   {'status_code': '201'} 120
+   {'status_code': '409'} 40
+   {'status_code': '404'} 40
+   {'status_code': '422'} 40
+idempotent replays (HTTP+gRPC), exact:
+   {} 80
+gRPC duration histogram, cumulative bucket counts:
+   {'le': '0.005'} 118
+   {'le': '0.01'} 231
+   {'le': '0.025'} 240
+   {'le': '0.05'} 240
+   {'le': '0.1'} 240
+   {'le': '0.25'} 240
+   {'le': '0.5'} 240
+   {'le': '0.75'} 240
+   {'le': '1.0'} 240
+   {'le': '2.5'} 240
+   {'le': '5.0'} 240
+   {'le': '+Inf'} 240
+completed transfers by front end:
+   {'job': 'wallet-app'} 80
+   {'job': 'wallet-grpc'} 80
+HTTP requests in progress (should now read 0 when idle):
+   {} 0

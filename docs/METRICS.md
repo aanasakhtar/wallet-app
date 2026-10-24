@@ -88,6 +88,8 @@ the business quantity). This is exactly the split the assignment describes.
 
 ### Gauge semantics
 
+> **Superseded in Assignment 2:** the two DB-derived gauges described here (`wallet_money_in_system_pkr`, `wallet_registered_users`) are no longer set by `refresh_business_gauges()` / `prime_gauges()`. They are read from the database at scrape time so the HTTP and gRPC processes always agree - see `docs/A2_REPORT.md`, section C.1.
+
 `wallet_money_in_system_pkr` and `wallet_registered_users` are recomputed from
 the database by `refresh_business_gauges()` after any balance- or user-changing
 operation, and again on startup (`prime_gauges` in `app/main.py`). The startup

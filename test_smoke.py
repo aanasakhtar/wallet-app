@@ -4,6 +4,7 @@ Uses a throwaway SQLite file so it never touches whatever DATABASE_URL
 you've set for real use.
 """
 import os
+import uuid
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_smoke.db"
 
@@ -15,6 +16,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 
 client = TestClient(app)
+
+
+def idem(headers):
+    """POST /transfers requires an Idempotency-Key (Assignment 2); a fresh one per call."""
+    return {**headers, "Idempotency-Key": str(uuid.uuid4())}
 
 
 def expect(condition, message):
@@ -50,7 +56,7 @@ def main():
         "/auth/signup",
         json={"name": "Alice2", "email": "alice@example.com", "password": "password123"},
     )
-    expect(r.status_code == 400, "duplicate email signup returns 400")
+    expect(r.status_code == 409, "duplicate email signup returns 409")
 
     print("\n--- wrong password is rejected ---")
     r = client.post("/auth/login", data={"username": "alice@example.com", "password": "wrong"})
@@ -61,8 +67,8 @@ def main():
     expect(r.status_code == 200 and r.json()["balance"] == 0.0, "Alice starts with balance 0")
 
     print("\n--- top up ---")
-    r = client.post("/wallet/topup", json={"amount": 1000}, headers=alice_headers)
-    expect(r.status_code == 200 and r.json()["status"] == "completed", "top-up of 1000 completes")
+    r = client.post("/wallet/topups", json={"amount": 1000}, headers=alice_headers)
+    expect(r.status_code == 201 and r.json()["status"] == "completed", "top-up of 1000 completes")
 
     r = client.get("/wallet/balance", headers=alice_headers)
     expect(r.json()["balance"] == 1000.0, "Alice's balance is 1000 after top-up")
@@ -71,9 +77,9 @@ def main():
     r = client.post(
         "/transfers",
         json={"recipient": "bob@example.com", "amount": 250},
-        headers=alice_headers,
+        headers=idem(alice_headers),
     )
-    expect(r.status_code == 200 and r.json()["status"] == "completed", "transfer of 250 completes")
+    expect(r.status_code == 201 and r.json()["status"] == "completed", "transfer of 250 completes (201 Created)")
 
     r = client.get("/wallet/balance", headers=alice_headers)
     expect(r.json()["balance"] == 750.0, "Alice's balance is 750 after sending 250")
@@ -85,25 +91,25 @@ def main():
     r = client.post(
         "/transfers",
         json={"recipient": "alice@example.com", "amount": 999999},
-        headers=bob_headers,
+        headers=idem(bob_headers),
     )
-    expect(r.status_code == 400, "over-limit transfer returns 400")
+    expect(r.status_code == 409, "over-limit transfer returns 409 (insufficient_balance)")
 
     print("\n--- self-transfer is rejected ---")
     r = client.post(
         "/transfers",
         json={"recipient": "alice@example.com", "amount": 10},
-        headers=alice_headers,
+        headers=idem(alice_headers),
     )
-    expect(r.status_code == 400, "self-transfer returns 400")
+    expect(r.status_code == 422, "self-transfer returns 422")
 
     print("\n--- transfer to unknown recipient is rejected ---")
     r = client.post(
         "/transfers",
         json={"recipient": "nobody@example.com", "amount": 10},
-        headers=alice_headers,
+        headers=idem(alice_headers),
     )
-    expect(r.status_code == 400, "transfer to unknown recipient returns 400")
+    expect(r.status_code == 404, "transfer to unknown recipient returns 404")
 
     print("\n--- transaction history ---")
     r = client.get("/transactions", headers=alice_headers)

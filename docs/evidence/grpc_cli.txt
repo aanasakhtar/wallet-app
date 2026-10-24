@@ -1,0 +1,24 @@
+$ python -m clients.grpc_client --email alice@demo.com --password password123 --recipient bob@demo.com --amount 250 --timeout 2 --request-id trace-demo-0001
+{
+  "ok": true,
+  "status": "OK",
+  "request_id": "trace-demo-0001",
+  "response": {
+    "transaction_id": "fb76addf-4a3b-4292-b66b-504874be6a95",
+    "status": "completed",
+    "amount": 250.0,
+    "from_wallet_id": "292da9ad-32e3-420a-b7bc-f37b5bbf82fb",
+    "to_wallet_id": "3d714e95-00a1-47d3-98ef-ad432b5cf32a",
+    "created_at": "2026-10-20T05:24:13.256368Z"
+  },
+  "replayed": false
+}
+
+$ ... --amount 999999   (insufficient balance), --request-id trace-demo-0002
+{
+  "ok": false,
+  "status": "FAILED_PRECONDITION",
+  "message": "Insufficient balance",
+  "error_code": "insufficient_balance",
+  "request_id": "trace-demo-0002"
+}

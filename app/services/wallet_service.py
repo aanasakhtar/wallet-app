@@ -36,7 +36,6 @@ def topup(db: Session, user: models.User, amount: float) -> models.Transaction:
     db.refresh(txn)
 
     metrics.transactions_total.labels(type="topup", status="completed").inc()
-    metrics.refresh_business_gauges(db)
 
     app_logger.info(
         "Top-up completed",

@@ -1,0 +1,10 @@
+[05:24:47] request  1 -> 201  {'ratelimit-limit': '5', 'ratelimit-remaining': '4'}
+[05:24:47] request  2 -> 201  {'ratelimit-limit': '5', 'ratelimit-remaining': '3'}
+[05:24:47] request  3 -> 201  {'ratelimit-limit': '5', 'ratelimit-remaining': '2'}
+[05:24:47] request  4 -> 201  {'ratelimit-limit': '5', 'ratelimit-remaining': '1'}
+[05:24:47] request  5 -> 201  {'ratelimit-limit': '5', 'ratelimit-remaining': '0'}
+[05:24:47] request  6 -> 429  {'retry-after': '10', 'ratelimit-limit': '5', 'ratelimit-remaining': '0'}
+          body: {"code": "rate_limited", "message": "Rate limit of 5 requests per 10s exceeded; retry in 10s", "request_id": "33d3cfbb-1382-4d03-8837-66f8d901df73"}
+
+Waiting Retry-After = 10s ...
+[05:24:58] request  7 -> 201  (accepted again)

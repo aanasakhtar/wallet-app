@@ -1,0 +1,10 @@
+=== SUCCESS: send 100 to a valid recipient ===
+HTTP  POST /transfers      -> 201 Created   transaction_id=3ac05809-72cd-47ea-a82e-cd1298e57861  status=completed
+gRPC  CreateTransfer       -> OK        transaction_id=a9230788-9d90-4825-8a50-4eae27d45cf9  status=completed
+
+=== FAILURE: send 100000 with a balance of 300 ===
+HTTP  POST /transfers      -> 409  {"code": "insufficient_balance", "message": "Insufficient balance", "request_id": "02ce78aa-9770-4c91-92fc-81b24e23a315"}
+gRPC  CreateTransfer       -> FAILED_PRECONDITION  message='Insufficient balance'  x-error-code=insufficient_balance
+
+=== same idempotency key through BOTH protocols ===
+HTTP  created transfer 7b649b47-68db-4a3e-b2a5-3c876f6da84c  |  gRPC returned 7b649b47-68db-4a3e-b2a5-3c876f6da84c replayed=True

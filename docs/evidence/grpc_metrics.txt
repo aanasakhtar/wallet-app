@@ -1,0 +1,4 @@
+wallet_transactions_total{status="completed",type="transfer"} 2.0
+wallet_transactions_total{status="failed",type="transfer"} 2.0
+wallet_idempotent_replays_total 1.0
+wallet_idempotent_replays_created 1.7924738449305377e+09

@@ -1,0 +1,7 @@
+# Needed only to run the tests, regenerate the gRPC stubs and export the OpenAPI file.
+-r requirements.txt
+grpcio-tools==1.84.0
+httpx
+PyYAML
+jsonschema
+openapi-spec-validator

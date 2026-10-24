@@ -10,3 +10,5 @@ python-multipart==0.0.9
 pydantic==2.9.2
 pydantic-settings==2.5.2
 prometheus-client==0.20.0
+grpcio==1.84.0
+protobuf==7.36.2

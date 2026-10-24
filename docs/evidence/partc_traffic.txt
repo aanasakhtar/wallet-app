@@ -1,0 +1,5 @@
+[02:52:47] sending 40 rounds ...
+[02:53:01] done in 13.5s
+HTTP  POST /transfers observed: {201: 120, 404: 40, 409: 40, 422: 40}
+gRPC  CreateTransfer  observed: {'FAILED_PRECONDITION': 40, 'INVALID_ARGUMENT': 40, 'NOT_FOUND': 40, 'OK': 120}
+expected per protocol: success/replay 120, rejected-by-balance 40, not-found 40, invalid 40

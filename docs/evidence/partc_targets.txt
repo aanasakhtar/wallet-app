@@ -1,0 +1,5 @@
+  cardinality-demo http://localhost:8001/metrics        down
+  node-exporter    http://localhost:9100/metrics        down
+  prometheus       http://localhost:9090/metrics        up
+  wallet-app       http://localhost:8000/metrics        up
+  wallet-grpc      http://localhost:8002/metrics        up

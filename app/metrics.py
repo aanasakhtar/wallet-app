@@ -72,15 +72,6 @@ pending_transfers = Gauge(
     "Transfers currently in flight (incremented on entry, decremented on completion or failure).",
 )
 
-money_in_system_pkr = Gauge(
-    "wallet_money_in_system_pkr",
-    "Sum of all wallet balances in PKR. Refreshed on every balance-changing operation.",
-)
-
-registered_users = Gauge(
-    "wallet_registered_users",
-    "Total number of registered users.",
-)
 
 # ---------------------------------------------------------------------------
 # SELF-EXPLORED METRICS
@@ -112,18 +103,89 @@ injected_faults_total = Counter(
 )
 
 
-def refresh_business_gauges(db) -> None:
-    """Recompute the gauges that describe overall system state.
+# ---------------------------------------------------------------------------
+# ASSIGNMENT 2 ADDITIONS
+# ---------------------------------------------------------------------------
 
-    Called after any operation that changes balances or user count. Kept as a
-    single function so there is exactly one place where gauge values come from.
-    """
-    from sqlalchemy import func
+rate_limit_rejections_total = Counter(
+    "wallet_rate_limit_rejections_total",
+    "Requests rejected with 429 by the rate limiter, by endpoint template.",
+    ["endpoint"],
+)
 
-    from . import models
+idempotent_replays_total = Counter(
+    "wallet_idempotent_replays_total",
+    "Transfer requests answered from an earlier result because the Idempotency-Key was already used.",
+)
 
-    total_balance = db.query(func.coalesce(func.sum(models.Wallet.balance), 0.0)).scalar()
-    money_in_system_pkr.set(float(total_balance or 0.0))
 
-    user_count = db.query(func.count(models.User.id)).scalar()
-    registered_users.set(int(user_count or 0))
+# ---------------------------------------------------------------------------
+# ASSIGNMENT 2, PART C
+# ---------------------------------------------------------------------------
+
+# --- State that lives in the DATABASE must be read at scrape time -------------
+#
+# Audit finding. In A1, wallet_money_in_system_pkr and wallet_registered_users were Gauges
+# that the process SET after each operation it handled. With one process that is fine. With
+# two processes (HTTP + gRPC) it is wrong: each process only updates its gauge when IT writes,
+# so after an HTTP top-up the gRPC process kept reporting the old balance (and reported 0
+# until its first write). A DB-derived value must not depend on which process wrote last.
+# Fix: a custom collector that asks the database every time Prometheus scrapes, so every
+# process always exposes the same, current value. (Cost: two cheap aggregate queries per scrape.)
+
+from prometheus_client.core import REGISTRY, GaugeMetricFamily  # noqa: E402
+
+
+class DatabaseStateCollector:
+    def collect(self):
+        import logging
+
+        from sqlalchemy import func
+
+        from . import models
+        from .database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            money = db.query(func.coalesce(func.sum(models.Wallet.balance), 0.0)).scalar()
+            users = db.query(func.count(models.User.id)).scalar()
+        except Exception:  # a DB hiccup must not break the whole scrape; the series just goes absent
+            logging.getLogger("wallet_app").warning("DB state metrics unavailable", exc_info=True)
+            return
+        finally:
+            db.close()
+        yield GaugeMetricFamily("wallet_money_in_system_pkr",
+                                "Sum of all wallet balances in PKR, read from the database at scrape time.",
+                                value=float(money or 0.0))
+        yield GaugeMetricFamily("wallet_registered_users",
+                                "Number of registered users, read from the database at scrape time.",
+                                value=float(users or 0))
+
+
+REGISTRY.register(DatabaseStateCollector())
+
+# --- gRPC server metrics (recorded by grpc_service/interceptors.py) -----------
+# Names mirror the HTTP metrics so the two can sit side by side in one dashboard.
+# Labels are bounded: grpc_method comes from the registered service definition (one value
+# today) and grpc_code is one of the 17 gRPC status names. No user / request / trace ids.
+
+_LATENCY_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0)
+
+grpc_server_handled_total = Counter(
+    "wallet_grpc_server_handled_total",
+    "gRPC calls completed by the server, by method and final status code.",
+    ["grpc_method", "grpc_code"],
+)
+
+grpc_server_handling_seconds = Histogram(
+    "wallet_grpc_server_handling_seconds",
+    "Server-side time spent in the RPC handler (interceptor entry to return), in seconds.",
+    ["grpc_method"],
+    buckets=_LATENCY_BUCKETS,
+)
+
+grpc_server_in_flight = Gauge(
+    "wallet_grpc_server_in_flight",
+    "gRPC calls currently being handled (the server runs a fixed pool of worker threads).",
+    ["grpc_method"],
+)

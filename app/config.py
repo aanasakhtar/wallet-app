@@ -14,6 +14,11 @@ class Settings:
     default_currency: str = os.getenv("DEFAULT_CURRENCY", "PKR")
     cashback_rate: float = float(os.getenv("CASHBACK_RATE", "0.0"))  # e.g. 0.01 = 1%
     admin_token: str = os.getenv("ADMIN_TOKEN", "local-admin-token")
+    # Rate limiting (single-instance, in memory). "LIMIT/WINDOW_SECONDS".
+    rate_limit_enabled: bool = os.getenv("RATE_LIMIT_ENABLED", "true").lower() in ("1", "true", "yes")
+    rate_limit_transfers: str = os.getenv("RATE_LIMIT_TRANSFERS", "20/60")
+    # How long an Idempotency-Key is remembered.
+    idempotency_ttl_seconds: int = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", str(24 * 3600)))
 
 
 settings = Settings()

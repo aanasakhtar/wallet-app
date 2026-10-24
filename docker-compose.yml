@@ -53,6 +53,29 @@ services:
         max-size: "10m"
         max-file: "5"
 
+  # Assignment 2, Part B: the gRPC service. SAME image, SAME database, separate process.
+  grpc:
+    build: .
+    image: wallet-app:latest
+    restart: unless-stopped
+    command: python -m grpc_service.server
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://wallet:wallet@db:5432/wallet
+      JWT_SECRET: change-me-in-production   # must match the app: the gRPC service validates the same tokens
+      SERVICE_NAME: wallet-grpc
+      LOG_FILE_NAME: wallet-grpc.json
+      LOG_DIR: /code/logs
+      GRPC_PORT: "50051"
+      GRPC_METRICS_PORT: "8002"
+    ports:
+      - "50051:50051"   # gRPC
+      - "8002:8002"     # Prometheus /metrics for this process
+    volumes:
+      - app_logs:/code/logs
+
   cardinality-demo:
     build: .
     image: wallet-app:latest

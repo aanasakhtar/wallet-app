@@ -1,6 +1,7 @@
 # Filebeat configuration for the NO-DOCKER setup.
 #
-# The app writes one JSON object per line to logs/wallet-app.json. Filebeat
+# The HTTP app writes logs/wallet-app.json and the gRPC service (Assignment 2) writes
+# logs/wallet-grpc.json - one JSON object per line each. Filebeat
 # tails that file, decodes each line into real fields, and ships the result
 # to Elasticsearch. Because the app already emits structured JSON, no grok
 # or dissect parsing is required.
@@ -15,7 +16,7 @@ filebeat.inputs:
     paths:
       # IMPORTANT: change this to the absolute path of your logs directory.
       # Filebeat does not expand ~ or resolve relative paths the way a shell does.
-      - /absolute/path/to/wallet-app/logs/wallet-app.json
+      - /absolute/path/to/wallet-app/logs/wallet-*.json   # matches both services; rotated files (.json.1) are not matched
 
     parsers:
       # Each line is a complete JSON object produced by app/logging_config.py.

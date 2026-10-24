@@ -1,0 +1,54 @@
+Settings: timeout=1.0s  max_retries=2  backoff=0.25s*2^n  breaker: open after 3 failed calls, recovery 5.0s
+
+== 1. healthy service ==
+[05:24:15] transfer #1: SUCCESS  id=e28ce9c3 replayed=False  (10 ms)  breaker=CLOSED
+[05:24:15] transfer #2: SUCCESS  id=8aa788d4 replayed=False  (39 ms)  breaker=CLOSED
+[05:24:15] transfer #3: SUCCESS  id=cd3afece replayed=False  (10 ms)  breaker=CLOSED
+[05:24:15] balance   : SUCCESS  id=9290c30b replayed=False  (3 ms)  breaker=CLOSED
+
+== 2. transient failure: every 2nd request returns 503, the retry succeeds ==
+[05:24:15]     attempt 1/3 failed: HTTP 503
+[05:24:15]     backing off 0.30s before retrying
+[05:24:15] transfer  : SUCCESS  id=3376f33a replayed=False  (312 ms)  breaker=CLOSED
+
+== 3. sustained outage: EVERY request returns 503 ==
+[05:24:15]     attempt 1/3 failed: HTTP 503
+[05:24:15]     backing off 0.27s before retrying
+[05:24:15]     attempt 2/3 failed: HTTP 503
+[05:24:15]     backing off 0.55s before retrying
+[05:24:16]     attempt 3/3 failed: HTTP 503
+[05:24:16] transfer (call 1): FAILED   POST /transfers failed after 3 attempt(s): HTTP 503  breaker=CLOSED (failed calls in a row: 1)
+[05:24:16]     attempt 1/3 failed: HTTP 503
+[05:24:16]     backing off 0.29s before retrying
+[05:24:16]     attempt 2/3 failed: HTTP 503
+[05:24:16]     backing off 0.52s before retrying
+[05:24:17]     attempt 3/3 failed: HTTP 503
+[05:24:17] transfer (call 2): FAILED   POST /transfers failed after 3 attempt(s): HTTP 503  breaker=CLOSED (failed calls in a row: 2)
+[05:24:17]     attempt 1/3 failed: HTTP 503
+[05:24:17]     backing off 0.28s before retrying
+[05:24:17]     attempt 2/3 failed: HTTP 503
+[05:24:17]     backing off 0.52s before retrying
+[05:24:18]     attempt 3/3 failed: HTTP 503
+[05:24:18] transfer (call 3): FAILED   POST /transfers failed after 3 attempt(s): HTTP 503  breaker=OPEN (failed calls in a row: 3)
+-- breaker is now OPEN: further calls must not reach the network --
+[05:24:18] transfer (blocked 1): BLOCKED  circuit open; calls blocked for another 5.0s  (0.0 ms, no request sent)  breaker=OPEN
+[05:24:18] transfer (blocked 2): BLOCKED  circuit open; calls blocked for another 5.0s  (0.0 ms, no request sent)  breaker=OPEN
+[05:24:18] transfer (blocked 3): BLOCKED  circuit open; calls blocked for another 5.0s  (0.0 ms, no request sent)  breaker=OPEN
+
+== 4. recovery ==
+[05:24:18] fault removed; waiting for the recovery period...
+[05:24:23] trial call (half-open): SUCCESS  id=cd609c68 replayed=False  (14 ms)  breaker=CLOSED
+[05:24:23] transfer  : SUCCESS  id=4d936207 replayed=False  (10 ms)  breaker=CLOSED
+[05:24:23] balance   : SUCCESS  id=9290c30b replayed=False  (3 ms)  breaker=CLOSED
+
+== 5. timeout that did NOT mean failure (why the Idempotency-Key matters) ==
+[05:24:23] balance before: 9940.0; sending 25 with key 74aafecd... while the server takes 1.5s per request
+[05:24:24]     attempt 1/3 failed: timeout
+[05:24:24]     backing off 0.29s before retrying
+[05:24:25]     attempt 2/3 failed: timeout
+[05:24:25]     backing off 0.54s before retrying
+[05:24:27]     attempt 3/3 failed: timeout
+[05:24:27] transfer  : FAILED   POST /transfers failed after 3 attempt(s): timeout  breaker=CLOSED (failed calls in a row: 1)
+[05:24:32] balance after the timeouts: 9915.0  -> debited 25 (the client saw only errors)
+[05:24:32] retry, same key: SUCCESS  id=fae7b7e6 replayed=True  (6 ms)  breaker=CLOSED
+[05:24:32] balance after the retry:    9915.0  -> still debited exactly once

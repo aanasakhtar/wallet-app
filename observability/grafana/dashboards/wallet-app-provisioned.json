@@ -736,7 +736,7 @@
             "type": "prometheus",
             "uid": "prometheus-main"
           },
-          "expr": "wallet_money_in_system_pkr",
+          "expr": "max(wallet_money_in_system_pkr)",
           "legendFormat": "total",
           "refId": "A",
           "instant": false,
@@ -796,7 +796,7 @@
             "type": "prometheus",
             "uid": "prometheus-main"
           },
-          "expr": "wallet_registered_users",
+          "expr": "max(wallet_registered_users)",
           "legendFormat": "users",
           "refId": "A",
           "instant": false,
@@ -856,7 +856,7 @@
             "type": "prometheus",
             "uid": "prometheus-main"
           },
-          "expr": "wallet_pending_transfers",
+          "expr": "sum(wallet_pending_transfers)",
           "legendFormat": "in flight",
           "refId": "A",
           "instant": false,
@@ -1478,6 +1478,797 @@
         }
       ],
       "id": 27
+    },
+    {
+      "type": "row",
+      "title": "Part C - send money: HTTP (left) vs gRPC (right)",
+      "gridPos": {
+        "x": 0,
+        "y": 67,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": [],
+      "id": 28
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP POST /transfers - calls/s by status code",
+      "description": "COUNTER from MetricsMiddleware. 201 = created (incl. idempotent replays), 404/409/422 = business or validation rejections, 429 = rate limited.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 68,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "sum by (status_code) (rate(wallet_http_requests_total{method=\"POST\",endpoint=\"/transfers\"}[1m]))",
+          "legendFormat": "{{status_code}}",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 29
+    },
+    {
+      "type": "timeseries",
+      "title": "gRPC CreateTransfer - calls/s by method and status",
+      "description": "COUNTER from the gRPC interceptor. OK = success, FAILED_PRECONDITION = insufficient balance, NOT_FOUND = unknown recipient, INVALID_ARGUMENT = validation, UNAUTHENTICATED = bad token, CANCELLED = the client gave up (deadline) before the server answered.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 68,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "sum by (grpc_method, grpc_code) (rate(wallet_grpc_server_handled_total[1m]))",
+          "legendFormat": "{{grpc_method}} {{grpc_code}}",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 30
+    },
+    {
+      "type": "stat",
+      "title": "HTTP: non-2xx share of calls (5m)",
+      "description": "Everything that is not 2xx, including expected business rejections (409/404/422).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 76,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "(sum(rate(wallet_http_requests_total{method=\"POST\",endpoint=\"/transfers\",status_code!~\"2..\"}[5m])) or vector(0)) / sum(rate(wallet_http_requests_total{method=\"POST\",endpoint=\"/transfers\"}[5m]))",
+          "legendFormat": "non-2xx",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 31
+    },
+    {
+      "type": "stat",
+      "title": "HTTP: server errors (5xx) share (5m)",
+      "description": "The 'our fault' error rate. Business rejections are NOT counted here.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 76,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "(sum(rate(wallet_http_requests_total{method=\"POST\",endpoint=\"/transfers\",status_code=~\"5..\"}[5m])) or vector(0)) / sum(rate(wallet_http_requests_total{method=\"POST\",endpoint=\"/transfers\"}[5m]))",
+          "legendFormat": "5xx",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 32
+    },
+    {
+      "type": "stat",
+      "title": "gRPC: non-OK share of calls (5m)",
+      "description": "Counterpart of the HTTP non-2xx share (OK <-> 2xx).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 76,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "(sum(rate(wallet_grpc_server_handled_total{grpc_code!=\"OK\"}[5m])) or vector(0)) / sum(rate(wallet_grpc_server_handled_total[5m]))",
+          "legendFormat": "non-OK",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 33
+    },
+    {
+      "type": "stat",
+      "title": "gRPC: server errors share (5m)",
+      "description": "Counterpart of 5xx: INTERNAL, UNKNOWN, UNAVAILABLE, DATA_LOSS.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 76,
+        "w": 6,
+        "h": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "(sum(rate(wallet_grpc_server_handled_total{grpc_code=~\"INTERNAL|UNKNOWN|UNAVAILABLE|DATA_LOSS\"}[5m])) or vector(0)) / sum(rate(wallet_grpc_server_handled_total[5m]))",
+          "legendFormat": "server errors",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 34
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP POST /transfers - latency p50 / p95 (5m window)",
+      "description": "HISTOGRAM. Each point = quantile of the previous 5 minutes. Measured SERVER-side in the HTTP middleware (routing + validation + handler + response).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 81,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(wallet_http_request_duration_seconds_bucket{method=\"POST\",endpoint=\"/transfers\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(wallet_http_request_duration_seconds_bucket{method=\"POST\",endpoint=\"/transfers\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 35
+    },
+    {
+      "type": "timeseries",
+      "title": "gRPC CreateTransfer - latency p50 / p95 (5m window)",
+      "description": "HISTOGRAM. Same 5-minute window and same bucket edges as the HTTP panel so the two are comparable. Measured SERVER-side around the handler only (excludes network and protobuf (de)serialisation).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 81,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(wallet_grpc_server_handling_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(wallet_grpc_server_handling_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 36
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP requests in progress (all endpoints)",
+      "description": "GAUGE. Process-wide (not per endpoint), so it is the closest HTTP counterpart of the gRPC gauge.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 89,
+        "w": 12,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "sum(wallet_http_requests_in_progress)",
+          "legendFormat": "in flight",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 37
+    },
+    {
+      "type": "timeseries",
+      "title": "gRPC in-flight calls",
+      "description": "GAUGE chosen over message size: the server has a fixed pool of 10 worker threads, so in-flight calls show saturation directly; message sizes here are tiny and constant, which would tell us nothing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 89,
+        "w": 12,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "sum by (grpc_method) (wallet_grpc_server_in_flight)",
+          "legendFormat": "{{grpc_method}}",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 38
+    },
+    {
+      "type": "timeseries",
+      "title": "Completed transfers/s by front end (job)",
+      "description": "The shared service layer records this counter in BOTH processes; the job label tells them apart: wallet-app = HTTP, wallet-grpc = gRPC.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 95,
+        "w": 8,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "sum by (job) (rate(wallet_transactions_total{type=\"transfer\",status=\"completed\"}[1m]))",
+          "legendFormat": "{{job}}",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 39
+    },
+    {
+      "type": "stat",
+      "title": "Idempotent replays / rate-limit rejections",
+      "description": "COUNTERS added in Assignment 2: duplicate transfer requests answered from the stored result, and requests rejected by the rate limiter, over the selected dashboard time range. `or vector(0)` shows 0 instead of 'No data' when nothing happened. Note increase() extrapolates to the window edges, so it can read slightly above the true integer count.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 95,
+        "w": 8,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "sum(increase(wallet_idempotent_replays_total[$__range])) or vector(0)",
+          "legendFormat": "replays",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "sum(increase(wallet_rate_limit_rejections_total[$__range])) or vector(0)",
+          "legendFormat": "429s",
+          "refId": "B",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 40
+    },
+    {
+      "type": "stat",
+      "title": "Scrape health (up)",
+      "description": "1 = Prometheus scraped the target successfully on its last attempt. Confirms the gRPC service is scraped.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-main"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 95,
+        "w": 8,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-main"
+          },
+          "expr": "up{job=~\"wallet-app|wallet-grpc\"}",
+          "legendFormat": "{{job}}",
+          "refId": "A",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "id": 41
     }
   ],
   "uid": "wallet-app-obs"

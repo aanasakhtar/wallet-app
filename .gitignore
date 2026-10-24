@@ -11,3 +11,9 @@ test_logs/
 stack/
 filebeat-logs/
 .kilo
+# Assignment 2 test/export artefacts
+test_*_logs/
+openapi_export*
+demo.db
+
+files/

@@ -20,6 +20,7 @@ import random
 import statistics
 import sys
 import time
+import uuid
 import urllib.error
 import urllib.request
 
@@ -57,37 +58,40 @@ def request(method, path, body=None, headers=None, form=False):
         return 0, {}, time.perf_counter() - start
 
 
-def ensure_users():
-    """Create the two fixed test users if they don't exist, and return tokens.
-    Safe to re-run - a duplicate signup just returns 400 and is ignored."""
-    users = [
-        ("Load Alice", "load-alice@example.com", "+92311000001"),
-        ("Load Bob", "load-bob@example.com", "+92311000002"),
-    ]
-    tokens = []
-    for name, email, phone in users:
-        request("POST", "/auth/signup",
-                {"name": name, "email": email, "phone": phone, "password": "loadtest123"})
-        status, body, _ = request("POST", "/auth/login",
-                                  {"username": email, "password": "loadtest123"}, form=True)
-        if status != 200:
-            print(f"Could not log in as {email} (status {status}). Is the app running?")
-            sys.exit(1)
-        tokens.append({"Authorization": f"Bearer {body['access_token']}"})
+def _login(name, email, phone):
+    request("POST", "/auth/signup", {"name": name, "email": email, "phone": phone, "password": "loadtest123"})
+    status, body, _ = request("POST", "/auth/login", {"username": email, "password": "loadtest123"}, form=True)
+    if status != 200:
+        print(f"Could not log in as {email} (status {status}). Is the app running?")
+        sys.exit(1)
+    return {"Authorization": f"Bearer {body['access_token']}"}
 
-    # Give Alice plenty of balance so transfers succeed for the whole run.
-    request("POST", "/wallet/topup", {"amount": 500000}, headers=tokens[0])
-    return tokens[0], tokens[1]
+
+def ensure_users(n_senders):
+    """Create the test users if missing (safe to re-run: a duplicate signup is a 409 and ignored).
+
+    Assignment 2 added a per-user rate limit on POST /transfers (default 20 per 60 s). One sender
+    at ~3 transfers/s would trip it, so the load is spread over a pool of senders - exactly what
+    many real users would look like to the limiter.
+    """
+    senders = []
+    for i in range(n_senders):
+        h = _login(f"Load Sender {i}", f"load-sender-{i}@example.com", f"+9231100{i:04d}")
+        request("POST", "/wallet/topups", {"amount": 500000}, headers=h)  # enough for the whole run
+        senders.append(h)
+    bob = _login("Load Bob", "load-bob@example.com", "+92311000002")
+    return senders, bob
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--duration", type=int, default=120, help="seconds to run")
     ap.add_argument("--rps", type=float, default=5, help="requests per second")
+    ap.add_argument("--senders", type=int, default=12, help="distinct sender accounts (keeps each under the rate limit)")
     ap.add_argument("--label", default="run", help="name for this stage, e.g. baseline/fault/recovery")
     args = ap.parse_args()
 
-    alice, bob = ensure_users()
+    senders, bob = ensure_users(args.senders)
 
     interval = 1.0 / args.rps
     deadline = time.time() + args.duration
@@ -108,9 +112,9 @@ def main():
             status, _, elapsed = request(
                 "POST", "/transfers",
                 {"recipient": "load-bob@example.com", "amount": random.choice([50, 100, 250, 500, 1200, 3000])},
-                headers=alice)
+                headers={**random.choice(senders), "Idempotency-Key": str(uuid.uuid4())})
         elif roll < 0.75:
-            status, _, elapsed = request("GET", "/wallet/balance", headers=alice)
+            status, _, elapsed = request("GET", "/wallet/balance", headers=random.choice(senders))
         elif roll < 0.90:
             status, _, elapsed = request("GET", "/transactions", headers=bob)
         else:

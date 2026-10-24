@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package wallet.v1;
+
+// gRPC version of the "send money" operation (HTTP: POST /transfers).
+// Both use the SAME business code (app/services/transfer_service.create_transfer)
+// and the SAME database; only the transport differs.
+service TransferService {
+  // Moves `amount` from the caller's wallet to the recipient's.
+  //
+  // Request metadata:
+  //   authorization : "Bearer <JWT>"   (same token the HTTP API issues; required)
+  //   x-request-id  : correlation id   (optional; echoed back and written to every log line)
+  //
+  // Status codes (HTTP equivalent in brackets):
+  //   OK                  transfer created, or replayed for a repeated idempotency_key  [201]
+  //   UNAUTHENTICATED     missing / invalid / expired token                             [401]
+  //   INVALID_ARGUMENT    bad field, self-transfer, key reused with a different body    [422]
+  //   NOT_FOUND           no user with that email/phone                                 [404]
+  //   FAILED_PRECONDITION insufficient balance                                          [409]
+  //   DEADLINE_EXCEEDED   the caller's deadline passed (raised client-side)             [timeout]
+  // The machine-readable error code (e.g. "insufficient_balance") is returned in the
+  // trailing metadata key `x-error-code`, matching `error.code` in the HTTP error body.
+  rpc CreateTransfer(CreateTransferRequest) returns (CreateTransferResponse);
+}
+
+message CreateTransferRequest {
+  string recipient = 1;        // recipient's email or phone
+  double amount = 2;           // PKR, > 0, at most 2 decimals, <= 1,000,000
+  string idempotency_key = 3;  // 8-64 chars of A-Z a-z 0-9 _ -  (required)
+}
+
+message CreateTransferResponse {
+  string transaction_id = 1;
+  string status = 2;           // "completed"
+  double amount = 3;
+  string from_wallet_id = 4;
+  string to_wallet_id = 5;
+  string created_at = 6;       // RFC 3339, UTC
+  bool replayed = 7;           // true when answered from an earlier request with the same key
+}

@@ -1,18 +1,15 @@
 import time
+from typing import Optional, Tuple
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import models, metrics
 from ..config import settings
+from ..errors import (DomainError, InsufficientBalance, RecipientNotFound, SelfTransfer,
+                      TransferError, TransferNotFound)
 from ..logging_config import app_logger
-
-
-class TransferError(Exception):
-    """Raised for any transfer failure the router should turn into a 4xx."""
-
-    def __init__(self, message: str, reason: str):
-        super().__init__(message)
-        self.reason = reason
+from . import idempotency_service, wallet_service
 
 
 def _find_recipient(db: Session, identifier: str) -> models.User:
@@ -22,7 +19,7 @@ def _find_recipient(db: Session, identifier: str) -> models.User:
         .first()
     )
     if user is None:
-        raise TransferError("Recipient not found", reason="recipient_not_found")
+        raise RecipientNotFound()
     return user
 
 
@@ -31,6 +28,7 @@ def execute_transfer(
     sender: models.User,
     recipient_identifier: str,
     amount: float,
+    idempotency_record: Optional[models.IdempotencyKey] = None,
 ) -> models.Transaction:
     """Move money between two wallets.
 
@@ -60,7 +58,7 @@ def execute_transfer(
                 extra={"event": "transfer_rejected", "reason": "self_transfer",
                        "sender_user_id": sender.id},
             )
-            raise TransferError("Cannot transfer to yourself", reason="self_transfer")
+            raise SelfTransfer()
 
         # Lock both wallet rows in a stable order (by id) to avoid deadlocks if two
         # transfers between the same two wallets happen concurrently in opposite directions.
@@ -89,6 +87,8 @@ def execute_transfer(
                 status=models.TransactionStatus.failed,
             )
             db.add(txn)
+            if idempotency_record is not None:
+                db.delete(idempotency_record)  # a failed attempt must not consume the key
             db.commit()
 
             metrics.transactions_total.labels(type="transfer", status="failed").inc()
@@ -103,7 +103,7 @@ def execute_transfer(
                     "amount": amount,
                 },
             )
-            raise TransferError("Insufficient balance", reason="insufficient_balance")
+            raise InsufficientBalance()
 
         sender_wallet.balance -= amount
         recipient_wallet.balance += amount
@@ -131,6 +131,10 @@ def execute_transfer(
                 )
             )
 
+        if idempotency_record is not None:
+            db.flush()  # assigns txn.id
+            idempotency_record.transaction_id = txn.id  # same DB transaction as the money movement
+
         db.commit()
         db.refresh(txn)
 
@@ -138,7 +142,6 @@ def execute_transfer(
         metrics.transfer_amount_pkr.observe(amount)
         if cashback_amount > 0:
             metrics.transactions_total.labels(type="cashback", status="completed").inc()
-        metrics.refresh_business_gauges(db)
 
         app_logger.info(
             "Transfer completed",
@@ -155,3 +158,61 @@ def execute_transfer(
     finally:
         metrics.transfer_processing_seconds.observe(time.perf_counter() - start)
         metrics.pending_transfers.dec()
+
+
+def create_transfer(
+    db: Session,
+    sender: models.User,
+    recipient_identifier: str,
+    amount: float,
+    idempotency_key: str,
+) -> Tuple[models.Transaction, bool]:
+    """THE entry point for sending money, used by both the HTTP endpoint and the
+    gRPC handler. Returns (transaction, replayed)."""
+    request_hash = idempotency_service.fingerprint(recipient_identifier, amount)
+    replay_id, record = idempotency_service.begin(db, sender.id, idempotency_key, request_hash)
+
+    if replay_id is not None:
+        txn = db.get(models.Transaction, replay_id)
+        metrics.idempotent_replays_total.inc()
+        app_logger.info("Transfer replayed from idempotency key",
+                        extra={"event": "transfer_replayed", "transaction_id": replay_id,
+                               "idempotency_key": idempotency_key})
+        return txn, True
+
+    try:
+        txn = execute_transfer(db, sender, recipient_identifier, amount, idempotency_record=record)
+    except DomainError:
+        db.rollback()  # discards the uncommitted key row (a failed attempt keeps no key)
+        raise
+    return txn, False
+
+
+def get_transfer(db: Session, user: models.User, transfer_id: str) -> models.Transaction:
+    """A user may read only transfers they sent or received; anything else is a 404
+    (not a 403) so the existence of other users' transfers is not revealed."""
+    wallet = wallet_service.get_wallet_for_user(db, user)
+    txn = (
+        db.query(models.Transaction)
+        .filter(models.Transaction.id == transfer_id,
+                models.Transaction.type == models.TransactionType.transfer,
+                or_(models.Transaction.from_wallet_id == wallet.id,
+                    models.Transaction.to_wallet_id == wallet.id))
+        .first()
+    )
+    if txn is None:
+        raise TransferNotFound()
+    return txn
+
+
+def list_transactions(db: Session, user: models.User, limit: int, offset: int,
+                      type: Optional[models.TransactionType] = None,
+                      status: Optional[models.TransactionStatus] = None):
+    wallet = wallet_service.get_wallet_for_user(db, user)
+    q = db.query(models.Transaction).filter(
+        or_(models.Transaction.from_wallet_id == wallet.id, models.Transaction.to_wallet_id == wallet.id))
+    if type is not None:
+        q = q.filter(models.Transaction.type == type)
+    if status is not None:
+        q = q.filter(models.Transaction.status == status)
+    return q.order_by(models.Transaction.created_at.desc()).offset(offset).limit(limit).all()

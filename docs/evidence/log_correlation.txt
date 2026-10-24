@@ -1,0 +1,4 @@
+{"@timestamp": "2026-10-20T05:24:13.260816+00:00", "service": "wallet-grpc", "level": "INFO", "request_id": "trace-demo-0001", "event": "transfer_completed", "message": "Transfer completed", "amount": 250.0}
+{"@timestamp": "2026-10-20T05:24:13.261119+00:00", "service": "wallet-grpc", "level": "INFO", "request_id": "trace-demo-0001", "event": "grpc_call", "message": "gRPC call finished", "grpc_status": "OK"}
+{"@timestamp": "2026-10-20T05:24:13.411786+00:00", "service": "wallet-grpc", "level": "WARNING", "request_id": "trace-demo-0002", "event": "transfer_failed", "message": "Transfer failed: insufficient balance", "amount": 999999.0, "reason": "insufficient_balance"}
+{"@timestamp": "2026-10-20T05:24:13.412204+00:00", "service": "wallet-grpc", "level": "INFO", "request_id": "trace-demo-0002", "event": "grpc_call", "message": "gRPC call finished", "grpc_status": "FAILED_PRECONDITION"}

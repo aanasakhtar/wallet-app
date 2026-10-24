@@ -247,7 +247,7 @@ panels.append(
     stat(
         "Money in system (PKR)",
         0, 31, 6, 5,
-        [target("wallet_money_in_system_pkr", "total")],
+        [target("max(wallet_money_in_system_pkr)", "total")],
         unit="currencyPKR", decimals=2,
         desc="GAUGE. Sum of all wallet balances. Transfers conserve it; "
              "only top-ups and cashback move it. A sudden change is a red flag.",
@@ -258,7 +258,7 @@ panels.append(
     stat(
         "Registered users",
         6, 31, 6, 5,
-        [target("wallet_registered_users", "users")],
+        [target("max(wallet_registered_users)", "users")],
         desc="GAUGE, though it only grows here. Modelled as a gauge because it "
              "describes current state, not an accumulating event count.",
     )
@@ -268,7 +268,7 @@ panels.append(
     stat(
         "Pending transfers",
         12, 31, 6, 5,
-        [target("wallet_pending_transfers", "in flight")],
+        [target("sum(wallet_pending_transfers)", "in flight")],
         desc="GAUGE. Incremented on entry to the transfer service, decremented in "
              "finally. If it drifts upward and never returns to 0, transfers are stuck.",
     )
@@ -403,6 +403,100 @@ panels.append(
              "cost of the label: memory is consumed per series, not per sample.",
     )
 )
+
+# ---------------------------------------------------------------------------
+# Row 5: Assignment 2 Part C - the SAME operation (send money) over HTTP and over gRPC.
+# Left column = HTTP POST /transfers, right column = gRPC CreateTransfer.
+# Every rate uses a 1 m window; ratios and percentiles use a 5 m window (stated in each panel).
+# ---------------------------------------------------------------------------
+HT = 'method="POST",endpoint="/transfers"'
+panels.append(row("Part C - send money: HTTP (left) vs gRPC (right)", 67))
+
+panels.append(timeseries(
+    "HTTP POST /transfers - calls/s by status code", 0, 68, 12, 8,
+    [target(f'sum by (status_code) (rate(wallet_http_requests_total{{{HT}}}[1m]))', "{{status_code}}")],
+    unit="reqps", stack=True,
+    desc="COUNTER from MetricsMiddleware. 201 = created (incl. idempotent replays), 404/409/422 = business "
+         "or validation rejections, 429 = rate limited."))
+panels.append(timeseries(
+    "gRPC CreateTransfer - calls/s by method and status", 12, 68, 12, 8,
+    [target('sum by (grpc_method, grpc_code) (rate(wallet_grpc_server_handled_total[1m]))',
+            "{{grpc_method}} {{grpc_code}}")],
+    unit="reqps", stack=True,
+    desc="COUNTER from the gRPC interceptor. OK = success, FAILED_PRECONDITION = insufficient balance, "
+         "NOT_FOUND = unknown recipient, INVALID_ARGUMENT = validation, UNAUTHENTICATED = bad token, "
+         "CANCELLED = the client gave up (deadline) before the server answered."))
+
+panels.append(stat(
+    "HTTP: non-2xx share of calls (5m)", 0, 76, 6, 5,
+    [target(f'(sum(rate(wallet_http_requests_total{{{HT},status_code!~"2.."}}[5m])) or vector(0)) / '
+            f'sum(rate(wallet_http_requests_total{{{HT}}}[5m]))', "non-2xx")],
+    unit="percentunit", decimals=1,
+    desc="Everything that is not 2xx, including expected business rejections (409/404/422)."))
+panels.append(stat(
+    "HTTP: server errors (5xx) share (5m)", 6, 76, 6, 5,
+    [target(f'(sum(rate(wallet_http_requests_total{{{HT},status_code=~"5.."}}[5m])) or vector(0)) / '
+            f'sum(rate(wallet_http_requests_total{{{HT}}}[5m]))', "5xx")],
+    unit="percentunit", decimals=1,
+    desc="The 'our fault' error rate. Business rejections are NOT counted here."))
+panels.append(stat(
+    "gRPC: non-OK share of calls (5m)", 12, 76, 6, 5,
+    [target('(sum(rate(wallet_grpc_server_handled_total{grpc_code!="OK"}[5m])) or vector(0)) / '
+            'sum(rate(wallet_grpc_server_handled_total[5m]))', "non-OK")],
+    unit="percentunit", decimals=1,
+    desc="Counterpart of the HTTP non-2xx share (OK <-> 2xx)."))
+panels.append(stat(
+    "gRPC: server errors share (5m)", 18, 76, 6, 5,
+    [target('(sum(rate(wallet_grpc_server_handled_total{grpc_code=~"INTERNAL|UNKNOWN|UNAVAILABLE|DATA_LOSS"}[5m])) or vector(0)) / '
+            'sum(rate(wallet_grpc_server_handled_total[5m]))', "server errors")],
+    unit="percentunit", decimals=1,
+    desc="Counterpart of 5xx: INTERNAL, UNKNOWN, UNAVAILABLE, DATA_LOSS."))
+
+panels.append(timeseries(
+    "HTTP POST /transfers - latency p50 / p95 (5m window)", 0, 81, 12, 8,
+    [target(f'histogram_quantile(0.50, sum by (le) (rate(wallet_http_request_duration_seconds_bucket{{{HT}}}[5m])))', "p50"),
+     target(f'histogram_quantile(0.95, sum by (le) (rate(wallet_http_request_duration_seconds_bucket{{{HT}}}[5m])))', "p95")],
+    unit="s",
+    desc="HISTOGRAM. Each point = quantile of the previous 5 minutes. Measured SERVER-side in the HTTP "
+         "middleware (routing + validation + handler + response)."))
+panels.append(timeseries(
+    "gRPC CreateTransfer - latency p50 / p95 (5m window)", 12, 81, 12, 8,
+    [target('histogram_quantile(0.50, sum by (le) (rate(wallet_grpc_server_handling_seconds_bucket[5m])))', "p50"),
+     target('histogram_quantile(0.95, sum by (le) (rate(wallet_grpc_server_handling_seconds_bucket[5m])))', "p95")],
+    unit="s",
+    desc="HISTOGRAM. Same 5-minute window and same bucket edges as the HTTP panel so the two are comparable. "
+         "Measured SERVER-side around the handler only (excludes network and protobuf (de)serialisation)."))
+
+panels.append(timeseries(
+    "HTTP requests in progress (all endpoints)", 0, 89, 12, 6,
+    [target("sum(wallet_http_requests_in_progress)", "in flight")],
+    desc="GAUGE. Process-wide (not per endpoint), so it is the closest HTTP counterpart of the gRPC gauge."))
+panels.append(timeseries(
+    "gRPC in-flight calls", 12, 89, 12, 6,
+    [target("sum by (grpc_method) (wallet_grpc_server_in_flight)", "{{grpc_method}}")],
+    desc="GAUGE chosen over message size: the server has a fixed pool of 10 worker threads, so in-flight "
+         "calls show saturation directly; message sizes here are tiny and constant, which would tell us nothing."))
+
+panels.append(timeseries(
+    "Completed transfers/s by front end (job)", 0, 95, 8, 7,
+    [target('sum by (job) (rate(wallet_transactions_total{type="transfer",status="completed"}[1m]))', "{{job}}")],
+    unit="reqps",
+    desc="The shared service layer records this counter in BOTH processes; the job label tells them apart: "
+         "wallet-app = HTTP, wallet-grpc = gRPC."))
+panels.append(stat(
+    "Idempotent replays / rate-limit rejections", 8, 95, 8, 7,
+    [target("sum(increase(wallet_idempotent_replays_total[$__range])) or vector(0)", "replays"),
+     target("sum(increase(wallet_rate_limit_rejections_total[$__range])) or vector(0)", "429s")],
+    decimals=0,
+    desc="COUNTERS added in Assignment 2: duplicate transfer requests answered from the stored result, and "
+         "requests rejected by the rate limiter, over the selected dashboard time range. `or vector(0)` shows 0 "
+         "instead of 'No data' when nothing happened. Note increase() extrapolates to the window edges, so it can "
+         "read slightly above the true integer count."))
+panels.append(stat(
+    "Scrape health (up)", 16, 95, 8, 7,
+    [target('up{job=~"wallet-app|wallet-grpc"}', "{{job}}")],
+    decimals=0,
+    desc="1 = Prometheus scraped the target successfully on its last attempt. Confirms the gRPC service is scraped."))
 
 dashboard = {
     "__inputs": [

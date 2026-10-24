@@ -28,7 +28,11 @@ def _route_template(request: Request) -> str:
 
 class MetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        http_requests_in_progress.inc()
+        # A1 quirk fixed in A2: the scrape request itself used to count as 'in progress', so the gauge
+        # could never read 0 while Prometheus was looking at it.
+        counted = request.url.path != "/metrics"
+        if counted:
+            http_requests_in_progress.inc()
         start = time.perf_counter()
         status_code = 500  # assume failure until proven otherwise
         try:
@@ -50,4 +54,5 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                     method=request.method,
                     endpoint=endpoint,
                 ).observe(duration)
-            http_requests_in_progress.dec()
+            if counted:
+                http_requests_in_progress.dec()

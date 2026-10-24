@@ -64,9 +64,10 @@ test suites (62 assertions total). See _Testing_.
 | `/auth/signup`        | POST     | no    | Create user + zero-balance wallet              |
 | `/auth/login`         | POST     | no    | Get a JWT (form: `username`=email, `password`) |
 | `/wallet/balance`     | GET      | yes   | Current balance                                |
-| `/wallet/topup`       | POST     | yes   | Add money (simulated)                          |
-| `/transfers`          | POST     | yes   | Send money by email or phone                   |
-| `/transactions`       | GET      | yes   | Transaction history                            |
+| `/wallet/topups`      | POST     | yes   | Add money (simulated) → `201`                  |
+| `/transfers`          | POST     | yes   | Send money; **requires `Idempotency-Key`**; rate-limited → `201` + `Location` |
+| `/transfers/{id}`     | GET      | yes   | Read a transfer you sent or received           |
+| `/transactions`       | GET      | yes   | History; `limit`, `offset`, `type`, `status`   |
 | `/admin/faults`       | GET/POST | token | Experiment only — configure fault injection    |
 | `/admin/faults/reset` | POST     | token | Experiment only — turn all faults off          |
 
@@ -197,12 +198,13 @@ TOKEN=$(curl -s -X POST localhost:8000/auth/login \
   | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
 
 # Top up, transfer, check
-curl -X POST localhost:8000/wallet/topup -H "Authorization: Bearer $TOKEN" \
+curl -X POST localhost:8000/wallet/topups -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -d '{"amount": 5000}'
 
 curl -X POST localhost:8000/transfers -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "Idempotency-Key: demo-key-0001" \
   -d '{"recipient":"bob@example.com","amount":250}'
+# repeat the exact same command: same transfer comes back with "Idempotent-Replayed: true", no second debit
 
 curl -s localhost:8000/wallet/balance -H "Authorization: Bearer $TOKEN"
 curl -s localhost:8000/metrics | grep wallet_transactions_total
@@ -221,6 +223,12 @@ python3 scripts/load_test.py --duration 120 --rps 5 --label demo
 ```bash
 python3 test_smoke.py           # 20 checks: the application itself
 python3 test_observability.py   # 42 checks: metrics, faults, log pipeline
+python3 test_api.py             # 47 checks: Assignment 2 HTTP API (valid / invalid / repeated / rate limit)
+python3 test_openapi.py         # 25 checks: spec validity, drift, contract test
+python3 test_grpc.py            # 19 checks: gRPC service, parity with HTTP, deadline, log correlation
+python3 test_resilient_client.py  # 13 checks: timeout, retry, circuit breaker
+python3 test_grpc_metrics.py    # Part C: per-RPC metrics, bounded labels, scrape-time gauges
+python3 scripts/run_tests.py    # all seven, each in its own interpreter
 ```
 
 Neither needs a running server — both drive the app in-process. They use
@@ -393,3 +401,42 @@ Built with FastAPI, SQLAlchemy, `prometheus_client`, Prometheus, Grafana,
 Elasticsearch, Kibana and Filebeat. Metric naming follows the Prometheus
 naming and labelling guidance; the cardinality experiment follows the
 Prometheus documentation's guidance on label cardinality.
+
+
+---
+
+# Assignment 2 — HTTP API, gRPC, Metrics
+
+Report: [`docs/A2_REPORT.md`](docs/A2_REPORT.md) (Parts A, B and C). Evidence output: `docs/evidence/`.
+
+**Setup** (dev tools needed for tests / stub generation / OpenAPI export):
+```bash
+pip install -r requirements-dev.txt
+```
+
+**Run the HTTP app and the gRPC service** (two processes, one database — use the same `DATABASE_URL` for both):
+```bash
+uvicorn app.main:app --port 8000          # HTTP API   -> http://localhost:8000/docs
+python -m grpc_service.server             # gRPC :50051, Prometheus /metrics :8002, logs/wallet-grpc.json
+```
+With Docker: `docker compose up --build` starts `app`, `grpc` and Postgres (plus the A1 stack).
+
+| What | Command |
+|---|---|
+| OpenAPI file (regenerate / drift check) | `python scripts/export_openapi.py` / `python scripts/export_openapi.py --check` |
+| Regenerate gRPC stubs from the `.proto` | `python scripts/gen_proto.py` (= `python -m grpc_tools.protoc -I proto --python_out=generated --grpc_python_out=generated --pyi_out=generated proto/wallet/v1/wallet.proto`) |
+| gRPC client | `python -m clients.grpc_client --email alice@example.com --password password123 --recipient bob@example.com --amount 250 --timeout 2` |
+| Same request over HTTP and gRPC, side by side | `python scripts/compare_http_grpc.py` |
+| Rate limit demo (short window) | `RATE_LIMIT_TRANSFERS=5/10 uvicorn app.main:app` then `python scripts/rate_limit_demo.py` |
+| Python caller: timeout / retry / circuit breaker | `python scripts/reliability_demo.py` (app running; uses the A1 fault injector to cause real failures) |
+| Part C: repeatable success/failure traffic over HTTP **and** gRPC | `RATE_LIMIT_ENABLED=false uvicorn app.main:app` + `python -m grpc_service.server`, then `python scripts/part_c_traffic.py --rounds 40 --pause 0.25` |
+| Part C: run the dashboard's queries against Prometheus | `python scripts/query_dashboard.py --prometheus http://localhost:9090 --range 5m` |
+| Part C: rebuild the Grafana dashboard JSON | `python scripts/build_dashboard.py` (panels are in the **"Part C"** row) |
+| Part C: check HTTP/gRPC DB-gauge consistency | `python scripts/check_db_gauges.py` |
+| All tests | `python scripts/run_tests.py` |
+
+New environment variables: `RATE_LIMIT_ENABLED` (true), `RATE_LIMIT_TRANSFERS` (`20/60` = 20 per 60 s per user), `IDEMPOTENCY_TTL_SECONDS` (86400), `GRPC_PORT` (50051), `GRPC_METRICS_PORT` (8002).
+
+**Breaking changes since Assignment 1** (callers updated): `POST /wallet/topup` → `POST /wallet/topups` (`201`); `POST /transfers` now requires the `Idempotency-Key` header, returns `201`, and uses `404/409/422` instead of a blanket `400`; all errors use `{"error": {code, message, request_id}}`; `scripts/load_test.py` now spreads load over several sender accounts to stay under the rate limit.
+
+New layout: `proto/` (contract) · `generated/` (stubs) · `grpc_service/` (server, handler, interceptor) · `clients/` (gRPC client, resilient HTTP caller) · `openapi/wallet-api.yaml` · `app/errors.py` (shared HTTP+gRPC error table) · `app/validation.py` · `app/rate_limit.py` · `app/services/idempotency_service.py`.
