@@ -25,80 +25,133 @@ All implementations are accompanied by automated tests: **8 test suites across 1
 
 # Part A: Replicas and Routing Foundation
 
-## A.1 System Architecture & Topology
+## A.1 System Architecture & Code Implementation Mapping
 
-The distributed architecture deploys three identical application replicas (A, B, and C) behind an **Envoy L7 proxy**. Clients never connect directly to backend instances; all HTTP and gRPC traffic enters through Envoy's ingress listeners. A shared PostgreSQL database serves as the single source of truth for financial records, transaction ledgers, and idempotency states. Observability daemons (Prometheus and Filebeat) scrape and collect telemetry directly from each component.
+The distributed architecture deploys three identical application replicas (`app-a`, `app-b`, and `app-c`) fronted by an **Envoy L7 proxy and load balancer**. Downstream clients never communicate directly with backend replicas; all incoming HTTP and gRPC calls enter through Envoy's ingress listeners. A central PostgreSQL 16 database acts as the single source of truth for transactional ledger entries, account balances, and idempotency states. Observability collectors (Prometheus and Filebeat) scrape metrics and aggregate access logs across all tiers.
+
+### 1. Tiered Architectural Topology
+
+The system is structured into five distinct operational tiers:
 
 ```mermaid
 flowchart TD
-    subgraph CLIENTS["Workload Clients"]
-        HTTP_CLIENT["Fixed-Rate HTTP Client<br/>(scripts/fixed_rate_client.py)"]
-        GRPC_CLIENT["Fixed-Rate gRPC Client<br/>(scripts/fixed_rate_client.py)<br/>*Single Persistent HTTP/2 Connection*"]
+    subgraph TIER1["Tier 1: Client Ingress & Load Balancing"]
+        CLIENT["Benchmark / Clients<br/>scripts/fixed_rate_client.py"]
+        ENVOY["Envoy L7 Reverse Proxy<br/>observability/envoy/envoy.yaml<br/>HTTP: :10000 | gRPC: :10001 | Stats: :9901"]
+        CLIENT -->|"HTTP/1.1 or HTTP/2"| ENVOY
     end
 
-    subgraph PROXY["Envoy L7 Reverse Proxy (:10000, :10001, :9901)"]
-        direction TB
-        E_HTTP["HTTP/1.1 Listener (:10000)<br/>Routes /wallet/*, /transfers*"]
-        E_GRPC["HTTP/2 gRPC Listener (:10001)<br/>codec_type: HTTP2 (Downstream)<br/>Inspects Individual RPC Streams"]
-        E_ADMIN["Admin & Stats Listener (:9901)<br/>Prometheus /stats/prometheus"]
-        E_LOGS["Structured JSON Access Logs<br/>(selected_replica, trace_id, latency)"]
+    subgraph TIER2["Tier 2: Multi-Replica Application Layer"]
+        direction LR
+        REP_A["Replica A (REPLICA_ID=A)<br/>run_replica.py<br/>FastAPI :8000 | gRPC :50051"]
+        REP_B["Replica B (REPLICA_ID=B)<br/>run_replica.py<br/>FastAPI :8000 | gRPC :50051"]
+        REP_C["Replica C (REPLICA_ID=C)<br/>run_replica.py<br/>FastAPI :8000 | gRPC :50051"]
     end
 
-    subgraph REPLICAS["Application Replicas (Identical Codebase)"]
-        subgraph REP_A["Replica A (REPLICA_ID=A)"]
-            A_HTTP["FastAPI (:8000)"]
-            A_GRPC["gRPC Server (:50051)"]
-            A_METRICS["Prometheus (:8000/metrics)"]
-        end
-        subgraph REP_B["Replica B (REPLICA_ID=B)"]
-            B_HTTP["FastAPI (:8000)"]
-            B_GRPC["gRPC Server (:50051)"]
-            B_METRICS["Prometheus (:8000/metrics)"]
-        end
-        subgraph REP_C["Replica C (REPLICA_ID=C)"]
-            C_HTTP["FastAPI (:8000)"]
-            C_GRPC["gRPC Server (:50051)"]
-            C_METRICS["Prometheus (:8000/metrics)"]
-        end
+    ENVOY -->|"L7 Route & Balance"| REP_A
+    ENVOY -->|"L7 Route & Balance"| REP_B
+    ENVOY -->|"L7 Route & Balance"| REP_C
+
+    subgraph TIER3["Tier 3: Core Business Services & State Isolation"]
+        SERVICES["Shared Business Logic<br/>app/services/transfer_service.py<br/>app/services/idempotency_service.py"]
+        LOCAL_STATE["Process-Local State (In-Memory)<br/>Rate Limiting: app/rate_limit.py<br/>Fault Injection: app/faults.py"]
     end
 
-    subgraph STORAGE["Shared Central Storage"]
-        DB[("PostgreSQL 16 Database<br/>- Users & Wallets<br/>- Transactions Ledger<br/>- Idempotency Keys")]
+    REP_A & REP_B & REP_C --> SERVICES
+    REP_A & REP_B & REP_C -.->|"Independent Memory"| LOCAL_STATE
+
+    subgraph TIER4["Tier 4: Central Shared Persistence"]
+        DB[("PostgreSQL 16 (:5432)<br/>app/models.py<br/>wallets | transactions | idempotency_keys<br/>Strict Row-Locks: SELECT ... FOR UPDATE")]
     end
 
-    subgraph OBSERVABILITY["Observability Pipeline"]
-        PROM["Prometheus (:9090)<br/>Direct Scrapes of A, B, C, Envoy"]
-        GRAFANA["Grafana (:3000)<br/>Per-Replica Dashboard"]
-        FILEBEAT["Filebeat -> Elasticsearch -> Kibana<br/>Correlates Envoy logs + App logs"]
+    SERVICES -->|"ACID Transactions"| DB
+
+    subgraph TIER5["Tier 5: Cross-Cutting Observability Pipeline"]
+        direction LR
+        PROM["Prometheus (:9090)<br/>Scrapes :8000/metrics & :9901"]
+        GRAFANA["Grafana (:3000)<br/>observability/grafana/"]
+        ELK["Filebeat + Elasticsearch (:9200)<br/>JSON logs with REPLICA_ID & request_id"]
+        PROM --> GRAFANA
     end
 
-    HTTP_CLIENT -->|HTTP/1.1 requests| E_HTTP
-    GRPC_CLIENT -->|Single HTTP/2 TCP connection| E_GRPC
-
-    E_HTTP -->|HTTP/1.1| A_HTTP & B_HTTP & C_HTTP
-    E_GRPC -->|HTTP/2 streams via HttpProtocolOptions| A_GRPC & B_GRPC & C_GRPC
-
-    A_HTTP & B_HTTP & C_HTTP -->|SELECT FOR UPDATE / ACID Transactions| DB
-    A_GRPC & B_GRPC & C_GRPC -->|SELECT FOR UPDATE / ACID Transactions| DB
-
-    PROM -->|Direct scrape :8000/metrics| REP_A & REP_B & REP_C
-    PROM -->|Direct scrape :9901/stats/prometheus| E_ADMIN
-    PROM --> GRAFANA
-    E_LOGS --> FILEBEAT
-    REP_A & REP_B & REP_C -.->|JSON stdout| FILEBEAT
+    REP_A & REP_B & REP_C -.->|"Scrape /metrics"| PROM
+    ENVOY -.->|"Scrape /stats"| PROM
+    REP_A & REP_B & REP_C -.->|"JSON stdout"| ELK
+    ENVOY -.->|"access.log"| ELK
 ```
 
-### Component Port Mapping
-- **Envoy HTTP Front-end:** Host port `10000` (mapped to Envoy listener `:10000`)
-- **Envoy gRPC Front-end:** Host port `10001` (mapped to Envoy listener `:10001`)
-- **Envoy Admin / Prometheus Exporter:** Host port `9901` (mapped to Envoy `:9901`)
-- **Replica A (HTTP / gRPC):** Container ports `8000` / `50051` (Host direct ports: `8001` / `50151`)
-- **Replica B (HTTP / gRPC):** Container ports `8000` / `50051` (Host direct ports: `8002` / `50251`)
-- **Replica C (HTTP / gRPC):** Container ports `8000` / `50051` (Host direct ports: `8003` / `50351`)
-- **PostgreSQL Database:** Host / Network port `5432`
-- **Prometheus TSDB:** Host port `9090`
-- **Grafana Visualization:** Host port `3000`
-- **Elasticsearch & Kibana:** Host ports `9200` & `5601`
+---
+
+### 2. End-to-End Request Flow & Code Execution Lifecycle
+
+The following sequence diagram details how a money transfer request flows through the specific classes, functions, and database queries in the codebase:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Client / Benchmark
+    participant Envoy as Envoy Proxy (:10000)
+    participant Supervisor as run_replica.py
+    participant App as FastAPI (app/main.py)
+    participant Svc as TransferService (app/services/)
+    participant DB as PostgreSQL 16 (:5432)
+    participant Telemetry as Prometheus & Filebeat
+
+    Client->>Envoy: POST /transfers (Idempotency-Key: K, X-Request-ID: R)
+    Note over Envoy: Routes via configured cluster policy<br/>(Round-Robin, Weighted, Least-Request)
+    Envoy->>Supervisor: Forward HTTP request to selected replica (:8000)
+    Supervisor->>App: RequestContextMiddleware assigns request_id = R
+    Note over App: Injects REPLICA_ID (A, B, or C)<br/>Starts request duration histogram timer
+    App->>Svc: create_transfer(db, sender_id, recipient, amount, key=K)
+
+    rect rgb(240, 248, 255)
+        Note over Svc,DB: Atomic Financial Transaction with Row Locking
+        Svc->>DB: SELECT * FROM idempotency_keys WHERE user_id = U AND key = K
+        alt Replayed Request (Key Found)
+            DB-->>Svc: Existing transaction record
+            Svc-->>App: Return cached transfer payload (replayed=True)
+            App-->>Envoy: HTTP 201 Created (Header: Idempotent-Replayed: true)
+        else New Request (Key Not Found)
+            Svc->>DB: SELECT * FROM wallets WHERE id IN (first, second) FOR UPDATE
+            Note over Svc,DB: Wallets locked in deterministic ID order<br/>Eliminates cross-replica deadlocks
+            Svc->>DB: UPDATE wallets SET balance = balance - amount (Sender)
+            Svc->>DB: UPDATE wallets SET balance = balance + amount (Recipient)
+            Svc->>DB: INSERT INTO transactions & idempotency_keys
+            DB-->>Svc: COMMIT transaction
+            Svc-->>App: New transfer entity
+            App-->>Envoy: HTTP 201 Created (Header: X-Replica: A/B/C, Location: /transfers/{id})
+        end
+    end
+
+    Envoy-->>Client: HTTP 201 Created Response
+
+    par Asynchronous Observability Telemetry
+        App->>Telemetry: Increment wallet_http_requests_total{replica="A/B/C"}
+        App->>Telemetry: Observe wallet_http_request_duration_seconds
+        App->>Telemetry: Emit JSON log record with request_id = R and replica = A/B/C
+        Envoy->>Telemetry: Emit /var/log/envoy/access.log record with request_id = R
+    end
+```
+
+---
+
+### 3. Component to Code Implementation Mapping
+
+Every conceptual box in the architecture diagrams maps directly to concrete source files, configuration manifests, and Docker Compose services in the repository:
+
+| Architectural Tier | Docker Service | Host Port | Source Code / Manifest Path | Implementation Details |
+| :--- | :--- | :---: | :--- | :--- |
+| **Workload Generator** | Local host | N/A | [`scripts/fixed_rate_client.py`](file:///D:/fall26/ESD/wallet-app/scripts/fixed_rate_client.py) | Open-loop asynchronous workload generator using `asyncio` and `httpx`/`grpc.aio`. Provisions 15 sender/recipient pairs to prevent single-row locking contention. Computes exact $p50, p90, p95, p99$ latency percentiles. |
+| **L7 Reverse Proxy** | `envoy` | `10000`<br>`10001`<br>`9901` | [`observability/envoy/`](file:///D:/fall26/ESD/wallet-app/observability/envoy/)<br>• `envoy.yaml`<br>• `envoy-part-a.yaml`<br>• `envoy-part-c.yaml`<br>• `envoy-part-d-weighted.yaml`<br>• `envoy-part-d-least-request.yaml`<br>• `envoy-part-d-health.yaml` | Terminates HTTP/1.1 on `:10000` and HTTP/2 on `:10001`. Implements Layer 7 load balancing policies (`ROUND_ROBIN`, `LEAST_REQUEST`). Enforces upstream HTTP/2 via `HttpProtocolOptions` to prevent gRPC connection-pinning. Generates JSON access logs to `/var/log/envoy/access.log`. |
+| **Replica Supervisor** | `app-a`<br>`app-b`<br>`app-c` | `8001`<br>`8002`<br>`8003` | [`run_replica.py`](file:///D:/fall26/ESD/wallet-app/run_replica.py) | Supervisor process managing both FastAPI HTTP (`:8000`) via Uvicorn and gRPC server (`:50051`). Injects the container's `REPLICA_ID` (A, B, or C) into structured JSON logs and Prometheus metrics. |
+| **HTTP Front-End** | `app-*` | `:8000` | [`app/main.py`](file:///D:/fall26/ESD/wallet-app/app/main.py)<br>[`app/routers/`](file:///D:/fall26/ESD/wallet-app/app/routers/) | FastAPI application exposing `/auth`, `/wallet`, `/transfers`, `/health`, and `/metrics`. Employs `RequestContextMiddleware` to attach `X-Request-ID` and `X-Replica` headers. |
+| **gRPC Front-End** | `app-*` | `:50051` | [`grpc_service/server.py`](file:///D:/fall26/ESD/wallet-app/grpc_service/server.py)<br>[`grpc_service/service.py`](file:///D:/fall26/ESD/wallet-app/grpc_service/service.py) | gRPC server implementing `WalletService` and `TransferService` over HTTP/2, intercepting calls with `RequestContextInterceptor` for distributed tracing. |
+| **Core Transfer Engine** | `app-*` | Internal | [`app/services/transfer_service.py`](file:///D:/fall26/ESD/wallet-app/app/services/transfer_service.py) | Atomic money transfer business logic. Enforces deterministic wallet row locking order (`SELECT ... FOR UPDATE`) to prevent deadlocks and guarantees zero double-spending across replicas. |
+| **Idempotency Service** | `app-*` | Internal | [`app/services/idempotency_service.py`](file:///D:/fall26/ESD/wallet-app/app/services/idempotency_service.py) | Intercepts requests with `Idempotency-Key`. Queries central PostgreSQL `idempotency_keys` table. Returns cached responses on replay and rejects key reuse with different parameters (`422`). |
+| **Partitioned State** | `app-*` | Internal | [`app/rate_limit.py`](file:///D:/fall26/ESD/wallet-app/app/rate_limit.py)<br>[`app/faults.py`](file:///D:/fall26/ESD/wallet-app/app/faults.py) | In-memory sliding window deque (`collections.deque`) and runtime fault injector (injected 300ms latency via `/admin/faults` on Replica B). Non-shared across replica processes. |
+| **Persistence Database** | `db` | `5432` | [`app/database.py`](file:///D:/fall26/ESD/wallet-app/app/database.py)<br>[`app/models.py`](file:///D:/fall26/ESD/wallet-app/app/models.py) | PostgreSQL 16 container. SQLAlchemy models defining `User`, `Wallet`, `Transaction`, and `IdempotencyKey`. Sized connection pool (`pool_size=30, max_overflow=30`). |
+| **Metrics Pipeline** | `prometheus`<br>`grafana` | `9090`<br>`3000` | [`app/metrics.py`](file:///D:/fall26/ESD/wallet-app/app/metrics.py)<br>[`scripts/build_dashboard_a3.py`](file:///D:/fall26/ESD/wallet-app/scripts/build_dashboard_a3.py)<br>[`observability/prometheus/`](file:///D:/fall26/ESD/wallet-app/observability/prometheus/) | Prometheus scrapes each replica's `:8000/metrics` and Envoy's `:9901/stats/prometheus`. Grafana provides an 8-panel dashboard comparing request rate, traffic share %, active in-flight requests, and $p50/p95$ response times per replica. |
+| **Logging Pipeline** | `filebeat`<br>`elasticsearch`<br>`kibana` | `9200`<br>`5601` | [`app/logging_config.py`](file:///D:/fall26/ESD/wallet-app/app/logging_config.py)<br>[`observability/filebeat/filebeat.yml`](file:///D:/fall26/ESD/wallet-app/observability/filebeat/filebeat.yml) | Emits structured JSON logs containing `@timestamp`, `service`, `replica`, `level`, and `request_id`. Filebeat ingests container logs and `/var/log/envoy/access.log` into Elasticsearch data streams, enabling distributed trace correlation in Kibana. |
 
 ---
 
