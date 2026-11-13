@@ -8,8 +8,8 @@
     "theoretical_detection_s": 4.0,
     "theoretical_recovery_s": 4.0
   },
-  "measured_detection_time_s": 4.17,
-  "measured_recovery_time_s": 7.02,
+  "measured_detection_time_s": 6.57,
+  "measured_recovery_time_s": 7.7,
   "traffic_distribution": {
     "baseline_3_replicas": {
       "A": 10,
@@ -22,9 +22,9 @@
       "C": 15
     },
     "after_replica_b_recovery": {
-      "A": 13,
-      "B": 4,
-      "C": 13
+      "A": 11,
+      "B": 8,
+      "C": 11
     }
   },
   "success": true

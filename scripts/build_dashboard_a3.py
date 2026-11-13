@@ -79,8 +79,8 @@ panels = [
         "Request Rate per Replica (ops/sec)",
         0, 1, 12, 8,
         [
-            target('sum by (replica) (rate(wallet_http_requests_total[1m]))', "HTTP Replica {{replica}}"),
-            target('sum by (replica) (rate(wallet_grpc_server_handled_total[1m]))', "gRPC Replica {{replica}}"),
+            target('sum by (replica) (rate(wallet_http_requests_total{replica=~"[ABC]"}[1m]))', "HTTP Replica {{replica}}"),
+            target('sum by (replica) (rate(wallet_grpc_server_handled_total{replica=~"[ABC]"}[1m]))', "gRPC Replica {{replica}}"),
         ],
         unit="reqps",
         desc="Number of HTTP and gRPC requests handled per second by each backend replica.",
@@ -91,7 +91,7 @@ panels = [
         12, 1, 12, 8,
         [
             target(
-                'sum by (replica) (rate(wallet_http_requests_total[1m])) / ignoring(replica) group_left sum(rate(wallet_http_requests_total[1m])) * 100',
+                'sum by (replica) (rate(wallet_http_requests_total{replica=~"[ABC]"}[1m])) / ignoring(replica) group_left sum(rate(wallet_http_requests_total{replica=~"[ABC]"}[1m])) * 100',
                 "Replica {{replica}} Share %",
             ),
         ],
@@ -108,7 +108,7 @@ panels = [
         "Active Concurrent Requests per Replica",
         0, 10, 8, 8,
         [
-            target('sum by (replica) (wallet_http_requests_in_progress)', "Replica {{replica}} Active In-Flight"),
+            target('sum by (replica) (wallet_http_requests_in_progress{replica=~"[ABC]"})', "Replica {{replica}} Active In-Flight"),
         ],
         unit="short",
         desc="Number of simultaneous requests actively being processed on each replica.",
@@ -119,7 +119,7 @@ panels = [
         8, 10, 8, 8,
         [
             target(
-                'histogram_quantile(0.50, sum by (replica, le) (rate(wallet_http_request_duration_seconds_bucket[1m]))) * 1000',
+                'histogram_quantile(0.50, sum by (replica, le) (rate(wallet_http_request_duration_seconds_bucket{replica=~"[ABC]"}[1m]))) * 1000',
                 "Replica {{replica}} p50",
             ),
         ],
@@ -132,7 +132,7 @@ panels = [
         16, 10, 8, 8,
         [
             target(
-                'histogram_quantile(0.95, sum by (replica, le) (rate(wallet_http_request_duration_seconds_bucket[1m]))) * 1000',
+                'histogram_quantile(0.95, sum by (replica, le) (rate(wallet_http_request_duration_seconds_bucket{replica=~"[ABC]"}[1m]))) * 1000',
                 "Replica {{replica}} p95",
             ),
         ],
@@ -150,7 +150,7 @@ panels = [
         0, 19, 12, 8,
         [
             target(
-                'sum by (replica, status_code) (rate(wallet_http_requests_total{status_code=~"[245].."}[1m]))',
+                'sum by (replica, status_code) (rate(wallet_http_requests_total{replica=~"[ABC]", status_code=~"[245].."}[1m]))',
                 "Replica {{replica}} [{{status_code}}]",
             ),
         ],
