@@ -1,0 +1,21 @@
+{
+  "duration_seconds": 33.132,
+  "requests_sent": 900,
+  "requests_completed": 900,
+  "successes": 851,
+  "failures": {
+    "ReadTimeout": 23,
+    "HTTP_504": 23,
+    "RemoteProtocolError": 3
+  },
+  "actual_rps": 27.16,
+  "latency_ms": {
+    "min": 43.67,
+    "mean": 1496.08,
+    "p50": 126.89,
+    "p90": 5966.06,
+    "p95": 15010.58,
+    "p99": 15042.92,
+    "max": 16038.79
+  }
+}

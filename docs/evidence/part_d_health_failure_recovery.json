@@ -1,0 +1,31 @@
+{
+  "experiment": "active_health_check_failure_recovery",
+  "health_check_config": {
+    "interval_s": 2,
+    "timeout_s": 1,
+    "unhealthy_threshold": 2,
+    "healthy_threshold": 2,
+    "theoretical_detection_s": 4.0,
+    "theoretical_recovery_s": 4.0
+  },
+  "measured_detection_time_s": 4.17,
+  "measured_recovery_time_s": 7.02,
+  "traffic_distribution": {
+    "baseline_3_replicas": {
+      "A": 10,
+      "B": 10,
+      "C": 10
+    },
+    "during_replica_b_failure": {
+      "A": 15,
+      "B": 0,
+      "C": 15
+    },
+    "after_replica_b_recovery": {
+      "A": 13,
+      "B": 4,
+      "C": 13
+    }
+  },
+  "success": true
+}

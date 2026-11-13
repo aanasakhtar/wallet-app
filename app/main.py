@@ -3,6 +3,7 @@ from fastapi.responses import PlainTextResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import models
+from .config import settings
 from .database import Base, SessionLocal, engine
 from .error_handlers import register_error_handlers
 from .logging_config import app_logger, configure_logging
@@ -59,7 +60,7 @@ def startup() -> None:
 
 @app.get("/health", tags=["health"], summary="Liveness check")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "replica": settings.replica_id}
 
 
 @app.get("/metrics", tags=["observability"], summary="Prometheus scrape target",

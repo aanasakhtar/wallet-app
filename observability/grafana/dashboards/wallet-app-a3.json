@@ -115,7 +115,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (replica) (rate(http_requests_total[1m]))",
+          "expr": "sum by (replica) (rate(wallet_http_requests_total[1m]))",
           "legendFormat": "HTTP Replica {{replica}}",
           "refId": "A",
           "instant": false,
@@ -126,7 +126,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (replica) (rate(grpc_server_handled_total[1m]))",
+          "expr": "sum by (replica) (rate(wallet_grpc_server_handled_total[1m]))",
           "legendFormat": "gRPC Replica {{replica}}",
           "refId": "B",
           "instant": false,
@@ -185,7 +185,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (replica) (rate(http_requests_total[1m])) / ignoring(replica) group_left sum(rate(http_requests_total[1m])) * 100",
+          "expr": "sum by (replica) (rate(wallet_http_requests_total[1m])) / ignoring(replica) group_left sum(rate(wallet_http_requests_total[1m])) * 100",
           "legendFormat": "Replica {{replica}} Share %",
           "refId": "A",
           "instant": false,
@@ -256,7 +256,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (replica) (http_requests_in_progress)",
+          "expr": "sum by (replica) (wallet_http_requests_in_progress)",
           "legendFormat": "Replica {{replica}} Active In-Flight",
           "refId": "A",
           "instant": false,
@@ -315,7 +315,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.50, sum by (replica, le) (rate(http_request_duration_seconds_bucket[1m]))) * 1000",
+          "expr": "histogram_quantile(0.50, sum by (replica, le) (rate(wallet_http_request_duration_seconds_bucket[1m]))) * 1000",
           "legendFormat": "Replica {{replica}} p50",
           "refId": "A",
           "instant": false,
@@ -374,7 +374,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by (replica, le) (rate(http_request_duration_seconds_bucket[1m]))) * 1000",
+          "expr": "histogram_quantile(0.95, sum by (replica, le) (rate(wallet_http_request_duration_seconds_bucket[1m]))) * 1000",
           "legendFormat": "Replica {{replica}} p95",
           "refId": "A",
           "instant": false,
@@ -445,7 +445,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (replica, status_code) (rate(http_requests_total{status_code=~\"[245]..\"}[1m]))",
+          "expr": "sum by (replica, status_code) (rate(wallet_http_requests_total{status_code=~\"[245]..\"}[1m]))",
           "legendFormat": "Replica {{replica}} [{{status_code}}]",
           "refId": "A",
           "instant": false,

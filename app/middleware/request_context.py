@@ -15,6 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from ..config import settings
 from ..errors import error_body
 
 _request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
@@ -55,4 +56,5 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         finally:
             _request_id_ctx.reset(token)
         response.headers["X-Request-ID"] = request_id
+        response.headers["X-Replica"] = settings.replica_id
         return response

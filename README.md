@@ -1,4 +1,7 @@
-# Wallet API — Observability Assignment
+# Wallet API — Observability & Load Balancing
+
+> [!IMPORTANT]
+> **Assignment 3 (Load Balancing & Observability)** is complete and fully documented in **[`docs/A3_REPORT.md`](docs/A3_REPORT.md)** with live Docker empirical benchmarks, Envoy configuration variants, and architectural analysis. See [Assignment 3 Quick Start](#assignment-3-load-balancing-and-observability) below.
 
 A SadaPay-style digital wallet (sign up, top up, send money, view history)
 instrumented end to end: Prometheus + Grafana for metrics, Filebeat +

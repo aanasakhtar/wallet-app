@@ -13,6 +13,8 @@ COPY clients ./clients
 COPY scripts ./scripts
 COPY openapi ./openapi
 COPY cardinality_demo.py ./cardinality_demo.py
+COPY run_replica.py ./run_replica.py
+COPY test_*.py ./
 
 EXPOSE 8000 50051 8002
 

@@ -7,14 +7,17 @@ Features:
   - Asynchronous: Non-blocking coroutines for high-throughput HTTP (via httpx)
     and gRPC (via grpc.aio over a single HTTP/2 multiplexed channel).
   - Protocol agnostic: Supports --interface http and --interface grpc.
+  - Sender pooling: Automatically provisions a pool of senders so concurrent
+    financial transactions execute in parallel without false database row-lock contention.
   - Granular telemetry: Computes request rate, success/error distribution, and
     latency percentiles (p50, p90, p95, p99).
-  - JSON reporting: Can export benchmark results to JSON for automated analysis.
+  - JSON reporting: Exports benchmark results to JSON.
 """
 import argparse
 import asyncio
 import json
 import os
+import random
 import sys
 import time
 import uuid
@@ -87,19 +90,17 @@ async def run_http_workload(
     port: int,
     target_rps: float,
     duration: float,
-    token: str,
-    recipient: str,
+    pairs: List[tuple[str, str]],
     endpoint: str = "transfer",
     max_in_flight: int = 500,
 ) -> WorkloadStats:
     stats = WorkloadStats()
     base_url = f"http://{host}:{port}"
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
     sem = asyncio.Semaphore(max_in_flight)
 
     # Use persistent AsyncClient with HTTP/1.1 and connection pooling
     limits = httpx.Limits(max_keepalive_connections=100, max_connections=max_in_flight)
-    async with httpx.AsyncClient(base_url=base_url, headers=headers, limits=limits, timeout=10.0) as client:
+    async with httpx.AsyncClient(base_url=base_url, limits=limits, timeout=15.0) as client:
         active_tasks = []
         stats.start_time = time.perf_counter()
         interval = 1.0 / target_rps if target_rps > 0 else 0.01
@@ -110,12 +111,16 @@ async def run_http_workload(
                 t0 = time.perf_counter()
                 req_id = str(uuid.uuid4())
                 call_headers = {"x-request-id": req_id}
+                tok, recip = pairs[req_num % len(pairs)] if pairs else ("", "bob@example.com")
+                if tok:
+                    call_headers["Authorization"] = f"Bearer {tok}"
+
                 try:
                     if endpoint == "transfer":
                         call_headers["Idempotency-Key"] = f"bench-{req_id}"
                         res = await client.post(
                             "/transfers",
-                            json={"recipient": recipient, "amount": 1},
+                            json={"recipient": recip, "amount": 1},
                             headers=call_headers,
                         )
                     elif endpoint == "balance":
@@ -138,7 +143,6 @@ async def run_http_workload(
         for i in range(num_requests):
             stats.sent += 1
             active_tasks.append(asyncio.create_task(send_one(i)))
-            # Schedule next dispatch according to absolute timeline to eliminate drift
             expected_time = stats.start_time + (i + 1) * interval
             now = time.perf_counter()
             sleep_time = expected_time - now
@@ -159,8 +163,7 @@ async def run_grpc_workload(
     port: int,
     target_rps: float,
     duration: float,
-    token: str,
-    recipient: str,
+    pairs: List[tuple[str, str]],
     max_in_flight: int = 500,
 ) -> WorkloadStats:
     stats = WorkloadStats()
@@ -180,15 +183,16 @@ async def run_grpc_workload(
                 t0 = time.perf_counter()
                 req_id = str(uuid.uuid4())
                 metadata = [("x-request-id", req_id)]
-                if token:
-                    metadata.append(("authorization", f"Bearer {token}"))
+                tok, recip = pairs[req_num % len(pairs)] if pairs else ("", "bob@example.com")
+                if tok:
+                    metadata.append(("authorization", f"Bearer {tok}"))
                 req = wallet_pb2.CreateTransferRequest(
-                    recipient=recipient,
+                    recipient=recip,
                     amount=1.0,
                     idempotency_key=f"grpc-bench-{req_id}",
                 )
                 try:
-                    resp = await stub.CreateTransfer(req, timeout=5.0, metadata=metadata)
+                    resp = await stub.CreateTransfer(req, timeout=15.0, metadata=metadata)
                     lat = (time.perf_counter() - t0) * 1000.0
                     stats.record_success(lat)
                 except grpc.aio.AioRpcError as err:
@@ -216,24 +220,24 @@ async def run_grpc_workload(
     return stats
 
 
-def setup_auth(base_url: str) -> tuple[str, str]:
-    """Helper to register/login Alice & Bob and topup Alice."""
-    client = httpx.Client(base_url=base_url, timeout=10.0)
+def setup_auth_pool(base_url: str, num_pairs: int = 15) -> List[tuple[str, str]]:
+    """Helper to provision distinct sender/recipient pairs with generous balances."""
+    client = httpx.Client(base_url=base_url, timeout=15.0)
     uid = uuid.uuid4().hex[:6]
-    alice_email = f"bench-alice-{uid}@example.com"
-    bob_email = f"bench-bob-{uid}@example.com"
+    pairs = []
+    for i in range(num_pairs):
+        sender_email = f"sender-{i}-{uid}@example.com"
+        recip_email = f"recip-{i}-{uid}@example.com"
+        num_s = random.randint(1000000, 9999999)
+        num_r = random.randint(1000000, 9999999)
+        client.post("/auth/signup", json={"name": f"Sender {i}", "email": sender_email, "phone": f"+92300{num_s}", "password": "password123"})
+        client.post("/auth/signup", json={"name": f"Recipient {i}", "email": recip_email, "phone": f"+92301{num_r}", "password": "password123"})
+        res = client.post("/auth/login", data={"username": sender_email, "password": "password123"})
+        tok = res.json()["access_token"]
+        client.post("/wallet/topups", json={"amount": 500000}, headers={"Authorization": f"Bearer {tok}", "Idempotency-Key": f"topup-{i}-{uid}"})
+        pairs.append((tok, recip_email))
 
-    # Signup Alice & Bob
-    client.post("/auth/signup", json={"name": "Alice Bench", "email": alice_email, "phone": f"+92300{int(time.time())%10000000:07d}", "password": "password123"})
-    client.post("/auth/signup", json={"name": "Bob Bench", "email": bob_email, "phone": f"+92301{int(time.time()+1)%10000000:07d}", "password": "password123"})
-
-    # Login Alice
-    res = client.post("/auth/login", data={"username": alice_email, "password": "password123"})
-    token = res.json()["access_token"]
-
-    # Topup Alice heavily for benchmark
-    client.post("/wallet/topups", json={"amount": 1000000}, headers={"Authorization": f"Bearer {token}", "Idempotency-Key": f"topup-{uid}"})
-    return token, bob_email
+    return pairs
 
 
 def main():
@@ -244,7 +248,8 @@ def main():
     parser.add_argument("--target-rps", type=float, default=20.0, help="Target requests per second (open-loop rate)")
     parser.add_argument("--duration", type=float, default=10.0, help="Duration in seconds")
     parser.add_argument("--endpoint", default="health", choices=["transfer", "balance", "health"], help="HTTP endpoint under test")
-    parser.add_argument("--token", help="Bearer JWT token (if empty and needed, will auto-create)")
+    parser.add_argument("--token", help="Bearer JWT token (if provided, uses single token)")
+    parser.add_argument("--senders", type=int, default=10, help="Number of distinct sender accounts to pool")
     parser.add_argument("--recipient", default="bob@example.com", help="Recipient email for transfers")
     parser.add_argument("--output-json", help="Path to export results JSON")
     args = parser.parse_args()
@@ -258,18 +263,18 @@ def main():
     print(f"Duration:     {args.duration}s")
     print(f"Endpoint:     {args.endpoint}")
 
-    token = args.token or ""
-    recipient = args.recipient
+    pairs = [(args.token, args.recipient)] if args.token else []
 
-    # If transfer benchmark and no token provided, try to provision test account
-    if args.endpoint == "transfer" and not token and args.interface == "http":
+    # If transfer benchmark and no token provided, auto-provision test pool
+    if (args.endpoint == "transfer" or args.interface == "grpc") and not pairs:
         try:
-            print("Auto-provisioning test accounts...")
-            token, recipient = setup_auth(f"http://{args.host}:{port}")
-            print(f"Authenticated as Alice, recipient: {recipient}")
+            http_target = f"http://{args.host}:{10000 if args.interface == 'grpc' else port}"
+            print(f"Auto-provisioning pool of {args.senders} sender/recipient pairs against {http_target}...")
+            pairs = setup_auth_pool(http_target, num_pairs=args.senders)
+            print(f"Successfully provisioned {len(pairs)} independent pairs.")
         except Exception as e:
-            print(f"Notice: Could not auto-authenticate against http://{args.host}:{port}: {e}")
-            print("Will proceed with unauthenticated requests to measure rate/routing.")
+            print(f"Notice: Could not auto-authenticate against {http_target}: {e}")
+            print("Will proceed with unauthenticated requests.")
 
     if args.interface == "http":
         stats = asyncio.run(run_http_workload(
@@ -277,8 +282,7 @@ def main():
             port=port,
             target_rps=args.target_rps,
             duration=args.duration,
-            token=token,
-            recipient=recipient,
+            pairs=pairs,
             endpoint=args.endpoint,
         ))
     else:
@@ -287,8 +291,7 @@ def main():
             port=port,
             target_rps=args.target_rps,
             duration=args.duration,
-            token=token,
-            recipient=recipient,
+            pairs=pairs,
         ))
 
     summary = stats.summary()
@@ -306,6 +309,9 @@ def main():
     print(f"Latency (mean):     {summary['latency_ms']['mean']} ms")
 
     if args.output_json:
+        parent = os.path.dirname(args.output_json)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(args.output_json, "w") as f:
             json.dump(summary, f, indent=2)
         print(f"Results saved to: {args.output_json}")

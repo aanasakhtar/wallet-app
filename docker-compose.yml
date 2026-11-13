@@ -42,6 +42,7 @@ services:
       ADMIN_TOKEN: local-admin-token
       SERVICE_NAME: wallet-api
       REPLICA_ID: "A"
+      RATE_LIMIT_TRANSFERS: "10000/60"
       LOG_DIR: /code/logs
       LOG_FILE_NAME: wallet-app-a.json
       HTTP_PORT: "8000"
@@ -71,6 +72,7 @@ services:
       ADMIN_TOKEN: local-admin-token
       SERVICE_NAME: wallet-api
       REPLICA_ID: "B"
+      RATE_LIMIT_TRANSFERS: "10000/60"
       LOG_DIR: /code/logs
       LOG_FILE_NAME: wallet-app-b.json
       HTTP_PORT: "8000"
@@ -100,6 +102,7 @@ services:
       ADMIN_TOKEN: local-admin-token
       SERVICE_NAME: wallet-api
       REPLICA_ID: "C"
+      RATE_LIMIT_TRANSFERS: "10000/60"
       LOG_DIR: /code/logs
       LOG_FILE_NAME: wallet-app-c.json
       HTTP_PORT: "8000"
@@ -118,11 +121,12 @@ services:
   envoy:
     image: envoyproxy/envoy:v1.31-latest
     restart: unless-stopped
+    user: root
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /var/log/envoy && chown -R 101:101 /var/log/envoy && exec /docker-entrypoint.sh -c /etc/envoy/envoy.yaml --log-level info"]
     depends_on:
       - app-a
       - app-b
       - app-c
-    command: -c /etc/envoy/envoy.yaml --log-level info
     volumes:
       - ./observability/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - envoy_logs:/var/log/envoy
@@ -136,6 +140,7 @@ services:
     build: .
     image: wallet-app:latest
     restart: unless-stopped
+    profiles: ["legacy"]
     command: python run_replica.py
     depends_on:
       db:
@@ -183,9 +188,8 @@ services:
     restart: unless-stopped
     command:
       - "--path.rootfs=/host"
-    pid: host
     volumes:
-      - /:/host:ro,rslave
+      - /:/host:ro
     ports:
       - "9100:9100"
 

@@ -1,0 +1,17 @@
+{
+  "duration_seconds": 30.13,
+  "requests_sent": 900,
+  "requests_completed": 900,
+  "successes": 900,
+  "failures": {},
+  "actual_rps": 29.87,
+  "latency_ms": {
+    "min": 42.2,
+    "mean": 144.7,
+    "p50": 125.29,
+    "p90": 254.65,
+    "p95": 316.3,
+    "p99": 452.0,
+    "max": 517.81
+  }
+}

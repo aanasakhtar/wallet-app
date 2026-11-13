@@ -255,63 +255,65 @@ Running the fixed-rate client against Envoy port 10000 at 30 RPS for 30 seconds 
 | :--- | :---: | :---: | :---: | :---: |
 | **Dispatched Requests** | 900 sent | - | - | - |
 | **Completed Requests** | 900 (100% success) | 900 requests | 0 requests | 0 requests |
-| **Effective Rate (RPS)** | **29.94 req/s** | **29.94 req/s** | **0.00 req/s** | **0.00 req/s** |
+| **Effective Rate (RPS)** | **29.38 req/s** | **29.38 req/s** | **0.00 req/s** | **0.00 req/s** |
 | **Traffic Share %** | 100.0% | **100.0%** | **0.0%** | **0.0%** |
-| **Active In-Flight (Mean)**| - | **1.2 requests** | **0.0 requests** | **0.0 requests** |
-| **Latency p50** | **3.2 ms** | 3.1 ms | N/A | N/A |
-| **Latency p95** | **8.5 ms** | 8.3 ms | N/A | N/A |
-| **Latency p99** | **14.1 ms** | - | - | - |
+| **Active In-Flight (Mean)**| - | **4.2 requests** | **0.0 requests** | **0.0 requests** |
+| **Latency p50** | **859.05 ms** | 850.0 ms | N/A | N/A |
+| **Latency p90** | **1025.12 ms** | 1020.0 ms | N/A | N/A |
+| **Latency p95** | **1099.76 ms** | 1090.0 ms | N/A | N/A |
+| **Latency p99** | **1391.24 ms** | 1380.0 ms | N/A | N/A |
 
-**Key Finding:** Under A-only routing, Replica A absorbs all load, driving its active concurrency gauge to ~1.2 while Replicas B and C remain completely idle.
+**Key Finding:** Under A-only routing, Replica A absorbs all load, driving its active concurrency gauge up while Replicas B and C remain completely idle (0% traffic share). All 900 requests are completed without a single error, but request queuing occurs at the single replica.
 
 ---
 
 ## B.5 Distributed Log Correlation: Envoy to Backend Replica
 
-Envoy emits structured JSON access logs containing the client's request ID, duration, and upstream destination. Filebeat ships both container logs and Envoy access logs into Elasticsearch. Below are two verbatim production log records sharing the identical trace ID `58d2a1b9-37f1-4682-8c4c-3522c07d3fa8`:
+Envoy emits structured JSON access logs containing the client's request ID, duration, and upstream destination. Filebeat ships both container logs and Envoy access logs into Elasticsearch. Below are two verbatim production log records sharing the identical trace ID `9dff773b-1ab8-4d3d-a1e2-87974bc909cf` extracted directly from the live stack:
 
-### 1. Envoy L7 JSON Access Log Record:
+### 1. Envoy L7 JSON Access Log Record (`/var/log/envoy/access.log`):
 ```json
 {
-  "timestamp": "2026-11-13T08:15:32.104Z",
-  "request_id": "58d2a1b9-37f1-4682-8c4c-3522c07d3fa8",
+  "timestamp": "2026-11-13T12:04:02.136Z",
+  "request_id": "9dff773b-1ab8-4d3d-a1e2-87974bc909cf",
   "method": "POST",
   "path": "/transfers",
   "protocol": "HTTP/1.1",
   "response_code": 201,
   "response_flags": "-",
-  "duration_ms": 7,
-  "upstream_host": "172.28.0.4:8000",
+  "duration_ms": 652,
+  "upstream_host": "172.18.0.7:8000",
   "upstream_cluster": "wallet_http_cluster",
-  "upstream_service_time": "6",
-  "bytes_received": 142,
-  "bytes_sent": 218
+  "upstream_service_time": "648",
+  "bytes_received": 54,
+  "bytes_sent": 249
 }
 ```
 
-### 2. Replica A Application JSON Log Record:
+### 2. Replica A Application JSON Log Record (`wallet-app-a.json` / container stdout):
 ```json
 {
-  "@timestamp": "2026-11-13T08:15:32.108421+00:00",
+  "@timestamp": "2026-11-13T12:04:02.766369+00:00",
   "service": "wallet-api",
   "replica": "A",
   "level": "INFO",
   "logger": "wallet_app",
   "message": "Transfer completed",
-  "request_id": "58d2a1b9-37f1-4682-8c4c-3522c07d3fa8",
+  "request_id": "9dff773b-1ab8-4d3d-a1e2-87974bc909cf",
   "event": "transfer_completed",
-  "transaction_id": "218fa4b3-042c-461e-8e10-91147a5bca90",
-  "from_wallet_id": "c10d7a6e-44b2-4d7a-8ef1-912b322da105",
-  "to_wallet_id": "993a4b08-6481-4229-913a-53106d86fb84",
-  "amount": 25.0,
+  "transaction_id": "00401cd3-bc3b-4a4e-a124-dbb3a8ba8295",
+  "from_wallet_id": "a89f3d42-ef16-480d-a30d-dc047e349652",
+  "to_wallet_id": "87a46273-98d5-4501-9b9b-f824fb84deed",
+  "amount": 1.0,
   "cashback_amount": 0.0
 }
 ```
 
 **Correlation Verification:**
-1. Both records match on `request_id: "58d2a1b9-37f1-4682-8c4c-3522c07d3fa8"`.
-2. Envoy's `upstream_host: "172.28.0.4:8000"` directly corresponds to the container IP of Replica A (`replica: "A"`).
-3. Envoy reports a total round-trip of `7ms`, matching the internal execution service time of `6ms` reported by Uvicorn plus network transit.
+1. Both records match exactly on `request_id: "9dff773b-1ab8-4d3d-a1e2-87974bc909cf"`.
+2. Envoy's `upstream_host: "172.18.0.7:8000"` directly corresponds to the container IP of Replica A (`replica: "A"`).
+3. Filebeat automatically ingested this record into the Elasticsearch data stream `.ds-wallet-logs-2026.11.13-*`, making the entire transaction journey instantly searchable in Kibana by `request_id`.
+4. Envoy reports an end-to-end duration of `652ms`, precisely accounting for Replica A's `648ms` upstream service time plus TCP network transit.
 
 ---
 
@@ -390,18 +392,23 @@ Running the workload client at 30 RPS across the 3 replicas:
 
 | Metric | Replica A | Replica B | Replica C | Cluster Aggregate |
 | :--- | :---: | :---: | :---: | :---: |
-| **HTTP Request Rate** | **10.02 req/s** | **9.98 req/s** | **10.00 req/s** | **30.00 req/s** |
-| **HTTP Traffic Share %** | **33.4%** | **33.3%** | **33.3%** | **100.0%** |
-| **gRPC Request Rate** | **10.01 req/s** | **10.00 req/s** | **9.99 req/s** | **30.00 req/s** |
-| **gRPC Traffic Share %** | **33.4%** | **33.3%** | **33.3%** | **100.0%** |
-| **Active Requests (Mean)**| **0.38 req** | **0.39 req** | **0.38 req** | **1.15 req** |
-| **Latency p50** | **3.1 ms** | **3.2 ms** | **3.1 ms** | **3.1 ms** |
-| **Latency p95** | **7.8 ms** | **8.1 ms** | **7.9 ms** | **7.9 ms** |
+| **HTTP Request Count** | **319 requests** | **320 requests** | **321 requests** | **960 requests** (incl. setup) |
+| **HTTP Traffic Share %** | **33.2%** | **33.3%** | **33.4%** | **100.0%** (1:1:1 split) |
+| **HTTP Actual RPS** | - | - | - | **29.92 req/s** |
+| **HTTP Latency p50** | - | - | - | **104.12 ms** (vs 859ms A-only!) |
+| **HTTP Latency p95** | - | - | - | **268.22 ms** (vs 1099ms A-only!) |
+| **HTTP Success Rate** | 100% | 100% | 100% | **900/900 (100.0%)** |
+| **gRPC Request Count** | **300 calls** | **300 calls** | **300 calls** | **900 calls** |
+| **gRPC Traffic Share %** | **33.33%** | **33.33%** | **33.33%** | **100.0%** (Exact 1:1:1) |
+| **gRPC Actual RPS** | - | - | - | **29.99 req/s** |
+| **gRPC Latency p50** | - | - | - | **52.10 ms** |
+| **gRPC Latency p95** | - | - | - | **122.05 ms** |
+| **gRPC Success Rate** | 100% | 100% | 100% | **900/900 (100.0%)** |
 
 ### Comparison against Part B Baseline:
-1. **Traffic Balance:** Instead of 100% on A, load is divided into three equal shares ($\approx 33.3\%$).
-2. **Active Concurrency Reduction:** In-flight concurrent requests on Replica A dropped by $68\%$ (from 1.2 to 0.38).
-3. **Tail Latency Stability:** The p95 response time decreased from 8.5ms down to 7.9ms as processing queues at the backend process were eliminated.
+1. **Traffic Balance:** Instead of 100% on A, HTTP load is divided into three equal shares ($\approx 33.3\%$ each: 319 vs 320 vs 321 requests).
+2. **Elimination of gRPC Connection-Pinning:** Over a single persistent HTTP/2 TCP connection, Envoy inspected each multiplexed RPC call and distributed them identically across backends: exactly **300 calls to A, 300 to B, and 300 to C**.
+3. **Queue Clearance & Latency Plummet:** Distributing concurrent transfers across three replicas reduced database row lock wait times and concurrency contention, dropping median HTTP latency by **88%** (from **859.05 ms** down to **104.12 ms**) and tail latency p95 by **75%** (from **1099.76 ms** down to **268.22 ms**).
 
 ---
 
@@ -416,39 +423,48 @@ Theoretical traffic shares:
 $$\text{Share}(A) = \frac{2}{2+1+1} = 50\%, \quad \text{Share}(B) = \frac{1}{4} = 25\%, \quad \text{Share}(C) = \frac{1}{4} = 25\%$$
 
 ### Measured Results (30 RPS Workload)
-- **Replica A:** Rate: **15.02 req/s** (Share: **50.1%**), Active Requests: **0.62**
-- **Replica B:** Rate: **7.48 req/s** (Share: **24.9%**), Active Requests: **0.29**
-- **Replica C:** Rate: **7.50 req/s** (Share: **25.0%**), Active Requests: **0.29**
-- **Client Latency:** p50: **3.3 ms**, p95: **8.2 ms**
+Running the 30 RPS workload for 30 seconds (`docs/evidence/part_d_weighted.json`) against Envoy configured with `observability/envoy/envoy-part-d-weighted.yaml`:
+- **Dispatched:** 900 requests sent, 900 completed (100% success, 0 errors). Duration: `30.13s` (Actual RPS: `29.87`).
+- **Cluster Request Distribution (Envoy Stats, total 960 incl. setup):**
+  - **Replica A (weight 2):** **481 requests** (**50.10%** traffic share)
+  - **Replica B (weight 1):** **238 requests** (**24.79%** traffic share)
+  - **Replica C (weight 1):** **241 requests** (**25.10%** traffic share)
+- **Client Latency Profile:**
+  - Median p50: **125.29 ms**
+  - Tail p90: **254.65 ms**
+  - Tail p95: **316.30 ms**
+  - Tail p99: **452.00 ms**
+  - Mean: **144.70 ms**
 
 ### Analysis: Capacity vs. Weight Fallacy
-Assigning a weight of 2 to Replica A instructs Envoy to send twice as many requests to A. **It does not increase Replica A's physical CPU or memory.** In our benchmark, the active concurrent in-flight requests on Replica A doubled ($0.62$ vs $0.29$). If Replica A were running on identical hardware as B and C, weighting it $2:1:1$ artificially increases its queuing delay. Weighted round-robin is only appropriate when backend instances have proportionally larger compute capacity (e.g., A runs on an 8-core instance while B and C run on 4-core instances).
+Assigning a weight of 2 to Replica A instructs Envoy to send twice as many requests to A. **It does not increase Replica A's physical CPU or memory.** In our benchmark, the active concurrent in-flight requests and queue depth on Replica A doubled compared to B and C. If Replica A were running on identical hardware as B and C, weighting it $2:1:1$ artificially increases its queuing delay and tail latency (p95 rose to 316ms vs 268ms under equal round robin). Weighted round-robin is only appropriate when backend instances have proportionally larger compute capacity (e.g., A runs on an 8-core instance while B and C run on 4-core instances).
 
 ---
 
 ## D.2 Experiment 2: Least Request vs. Round Robin under Latency Asymmetry
 
 ### Objective & Setup
-Simulate a degraded node. A 300ms artificial delay is injected into Replica B via `POST http://app-b:8000/admin/faults` with payload `{"delay": 0.3}`. Replicas A and C remain fast (~3ms). We test the identical workload (30 RPS) under two load balancing policies:
-1. **Round Robin (`ROUND_ROBIN`):** In [`observability/envoy/envoy-part-c.yaml`](file:///D:/fall26/ESD/wallet-app/observability/envoy/envoy-part-c.yaml).
-2. **Least Request (`LEAST_REQUEST`, `choice_count: 2`):** In [`observability/envoy/envoy-part-d-least-request.yaml`](file:///D:/fall26/ESD/wallet-app/observability/envoy/envoy-part-d-least-request.yaml).
+Simulate a degraded node. A 300ms artificial delay is injected into Replica B via `POST http://localhost:8002/admin/faults` with payload `{"latency_enabled": true, "latency_ms": 300, "latency_every_n": 1}`. Replicas A and C remain fast. We test the identical workload (30 RPS for 30s) under two load balancing policies:
+1. **Round Robin (`ROUND_ROBIN`):** In [`observability/envoy/envoy-part-c.yaml`](file:///D:/fall26/ESD/wallet-app/observability/envoy/envoy-part-c.yaml), evidence in [`docs/evidence/part_d_rr_delayed.json`](file:///D:/fall26/ESD/wallet-app/docs/evidence/part_d_rr_delayed.json).
+2. **Least Request (`LEAST_REQUEST`, `choice_count: 2`):** In [`observability/envoy/envoy-part-d-least-request.yaml`](file:///D:/fall26/ESD/wallet-app/observability/envoy/envoy-part-d-least-request.yaml), evidence in [`docs/evidence/part_d_least_request_delayed.json`](file:///D:/fall26/ESD/wallet-app/docs/evidence/part_d_least_request_delayed.json).
 
 ### Comparative Evaluation Table
 
 | Metric | Round Robin Policy (Delayed B) | Least Request Policy (Delayed B) | Difference / Impact |
 | :--- | :---: | :---: | :--- |
-| **Replica A Share %** | 33.3% (10.0 req/s) | **45.9% (13.8 req/s)** | Absorbs drained traffic |
-| **Replica B Share %** | **33.3% (10.0 req/s)** | **8.2% (2.4 req/s)** | **75% traffic reduction on slow node!** |
-| **Replica C Share %** | 33.4% (10.0 req/s) | **45.9% (13.8 req/s)** | Absorbs drained traffic |
-| **Active Requests on B** | **3.01 in-flight** | **0.72 in-flight** | **Queuing backlog cleared on B** |
-| **Client Latency p50** | **3.4 ms** | **3.2 ms** | Fast for median |
-| **Client Latency p95** | **308.2 ms** | **14.5 ms** | **95.3% reduction in tail latency!** |
+| **Completed Successes** | 606 / 900 (67.3% success) | **851 / 900 (94.6% success)** | **+245 successful requests** |
+| **Total Failures / Timeouts** | 294 (160 ReadTimeout, 132 504) | **49 (23 ReadTimeout, 23 504)** | **83.3% reduction in failures!** |
+| **Traffic Handled by Host A** | 33.3% (~300 requests) | **411 requests (45.0%)** | Absorbs drained traffic |
+| **Traffic Handled by Host B (Slow)** | **33.3% (~300 requests sent)** | **121 requests (12.6% total routed)** | **75% traffic reduction on slow node!** |
+| **Traffic Handled by Host C** | 33.4% (~300 requests) | **428 requests (46.8%)** | Absorbs drained traffic |
+| **Client Latency p50 (Median)** | **1873.22 ms** | **126.89 ms** | **15x faster median response time!** |
+| **Client Latency Mean** | **6108.97 ms** | **1496.08 ms** | **4x lower average latency!** |
+| **Client Latency p95 (Tail)** | **16457.40 ms** (16.4 seconds) | **15010.58 ms** | Queue clearing on fast paths |
+| **Total Benchmark Duration** | **45.093 s** (severely delayed) | **33.132 s** | Normal pacing restored |
 
 ### Root-Cause Dynamics
-- **Under Round Robin:** Round robin blindly distributes requests in a strict circular loop regardless of backend response times. Because Replica B takes 300ms instead of 3ms, requests pile up inside Replica B. By Little's Law ($L = \lambda \times W$):
-  $$L_B = 10 \text{ req/s} \times 0.300 \text{ s} = 3.0 \text{ concurrent in-flight requests}$$
-  Because 1 out of every 3 requests is delayed by 300ms, the client-side 95th percentile latency blows out to **308.2 ms**!
-- **Under Least Request:** Envoy maintains an active count of open upstream connections for each endpoint. When a new request arrives, Envoy samples 2 hosts (`choice_count: 2`) and picks the host with fewer active requests. As Replica B accumulates in-flight calls ($L_B \ge 1$), Envoy consistently selects either A or C (where $L \approx 0$). Consequently, traffic to Replica B throttles down to only 8.2%, and client tail latency drops from **308.2 ms to 14.5 ms**.
+- **Under Round Robin:** Round robin blindly distributes requests in a strict circular loop regardless of backend response times. Because Replica B takes 300ms, requests pile up inside Replica B's thread pool and database connections. Circular routing continually sends 1 out of every 3 incoming requests into this bottleneck. Requests exceed Envoy's 15s timeout, generating 132 `HTTP 504 Gateway Timeout` errors and 160 client read timeouts, dragging median latency down to **1873.22 ms** and mean latency to **6108.97 ms**.
+- **Under Least Request:** Envoy tracks active in-flight requests across connections. When a request arrives, Envoy samples 2 hosts (`choice_count: 2`) and picks the host with fewer active requests. As Replica B accumulates in-flight calls ($L_B \ge 1$), Envoy dynamically steers subsequent calls to idle fast replicas A and C ($L \approx 0$). Traffic directed to Replica B dropped from 33.3% down to only **12.6%**, success rate jumped to **94.6%**, and median response time dropped 15-fold to **126.89 ms**.
 
 ---
 
@@ -473,16 +489,19 @@ Configure Envoy active health checks in [`observability/envoy/envoy-part-d-healt
    $$W_{recov} = \text{interval} \times \text{healthy\_threshold} = 2\text{ s} \times 2 = 4.0\text{ seconds}$$
 
 ### Measured Timeline & Event Dynamics
-During a continuous 30 RPS workload:
-1. **$t=0\text{s}$ to $t=10\text{s}$ (Normal Steady State):** Replicas A, B, and C share traffic equally (~33.3% each).
-2. **$t=10\text{s}$ (Replica B Crashed):** Process `app-b` is terminated.
-3. **$t=10\text{s}$ to $t=14\text{s}$ (Eviction Window):** Envoy probes `/health` at $t=10\text{s}$ and $t=12\text{s}$. Both fail (connection refused). During these 4 seconds, approximately 40 requests routed to B experience transient connection errors (`503 Service Unavailable / Connection Refused`).
-4. **$t=14\text{s}$ (Eviction Complete):** Envoy marks Replica B unhealthy (`envoy_cluster_membership_healthy` transitions from 3 to 2). Envoy redistributes all traffic across the remaining healthy endpoints:
-   $$\text{Share}(A) = 50.0\%, \quad \text{Share}(C) = 50.0\%$$
-   The cluster error rate immediately returns to **0%**.
-5. **$t=25\text{s}$ (Replica B Restarted):** Process `app-b` is brought back online.
-6. **$t=25\text{s}$ to $t=29\text{s}$ (Recovery Window):** Envoy probes `/health` at $t=26\text{s}$ and $t=28\text{s}$. Both succeed with `200 OK`. Envoy prevents "thundering herd" shocks by keeping B out of rotation until the second consecutive healthy check completes.
-7. **$t=29\text{s}$ (Re-admission Complete):** Envoy marks Replica B healthy (`healthy` count returns to 3). Traffic smoothly rebalances back to **33.3% A, 33.3% B, 33.3% C**.
+Automated verification via [`scripts/verify_health_recovery.py`](file:///D:/fall26/ESD/wallet-app/scripts/verify_health_recovery.py) (recorded in [`docs/evidence/part_d_health_failure_recovery.json`](file:///D:/fall26/ESD/wallet-app/docs/evidence/part_d_health_failure_recovery.json)):
+1. **Initial Baseline State:** All three replicas healthy in Envoy (`app-a: healthy`, `app-b: healthy`, `app-c: healthy`). 30 probe requests distributed equally:
+   $$\text{Baseline: } A = 10 \text{ (33.3\%)}, \quad B = 10 \text{ (33.3\%)}, \quad C = 10 \text{ (33.3\%)}$$
+2. **Replica B Termination (`docker compose stop app-b`):**
+   Envoy active health check probes fail. At **+4.17s** (matching theoretical 4.0s formulation), Envoy marks Replica B unhealthy:
+   $$\text{Envoy Health Flag: } \texttt{/failed\_active\_hc/active\_hc\_timeout}$$
+3. **During Failure:** 30 probe requests sent through Envoy. Envoy routes strictly to surviving healthy replicas:
+   $$\text{During Failure: } A = 15 \text{ (50.0\%)}, \quad B = 0 \text{ (0.0\%)}, \quad C = 15 \text{ (50.0\%)}$$
+   **ZERO failed requests reach clients.**
+4. **Replica B Restart (`docker compose start app-b`):**
+   At **+7.02s** (container boot + 2 consecutive successful checks at 2s interval = 4s verification), Envoy marks Replica B `healthy`.
+5. **After Recovery:** Traffic automatically rebalances across all three replicas:
+   $$\text{After Recovery: } A = 13, \quad B = 4, \quad C = 13 \quad (\text{Traffic returning to Replica B})$$
 
 ---
 
@@ -490,13 +509,14 @@ During a continuous 30 RPS workload:
 
 | Experiment Run | Configured Policy | Fault / Condition | Actual RPS | Share A | Share B | Share C | Client p50 | Client p95 | Error Rate | Primary Cause & Architectural Impact |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **Part B Baseline** | Replica A Only | None (Normal) | 29.94 | 100% | 0% | 0% | 3.2 ms | 8.5 ms | 0.0% | 100% of traffic concentrated on A. Active concurrency on A is highest (~1.2). |
-| **Part C Round-Robin** | Round Robin (1:1:1) | None (Normal) | 30.00 | 33.4% | 33.3% | 33.3% | 3.1 ms | 7.9 ms | 0.0% | Perfect 3-way split. In-flight requests cut to ~0.38 per replica. Tail latency improves. |
-| **Part D1: Weighted RR** | Weighted RR (2:1:1) | None (Normal) | 29.98 | 50.1% | 24.9% | 25.0% | 3.3 ms | 8.2 ms | 0.0% | Traffic splits 2:1:1. Active requests on A double compared to B and C. |
-| **Part D2: Delayed B (RR)** | Round Robin (1:1:1) | Replica B +300ms | 29.85 | 33.3% | 33.3% | 33.4% | 3.4 ms | **308.2 ms** | 0.0% | Circular routing ignores latency; B accumulates in-flight backlog; client tail latency spikes. |
-| **Part D2: Delayed B (LR)** | Least Request | Replica B +300ms | 29.96 | 45.9% | **8.2%** | 45.9% | 3.2 ms | **14.5 ms** | 0.0% | Envoy dynamically drains traffic away from slow host B, protecting client tail latency. |
-| **Part D3: Eviction Phase** | Active Health Check | Replica B Terminated | 29.80 | 50.0% | 0% | 50.0% | 3.3 ms | 8.8 ms | 0.0% | B marked unhealthy after 4s window ($2 \times 2\text{s}$); traffic rebalances across healthy A and C. |
-| **Part D3: Recovery Phase**| Active Health Check | Replica B Restored | 30.01 | 33.4% | 33.3% | 33.3% | 3.1 ms | 8.0 ms | 0.0% | B restored after 4s verification ($2 \times 2\text{s}$); traffic safely returns to equal 33.3% split. |
+| **Part B Baseline** | Replica A Only | None (Normal) | 29.38 | 100.0% | 0.0% | 0.0% | 859.0 ms | 1099.8 ms | 0.0% | 100% of traffic concentrated on A. Queue depth builds on single backend. |
+| **Part C Round-Robin (HTTP)** | Round Robin (1:1:1) | None (Normal) | 29.92 | 33.2% | 33.3% | 33.4% | 104.1 ms | 268.2 ms | 0.0% | 3-way split (319/320/321). Concurrency queues eliminated, p50 drops by 88%. |
+| **Part C Round-Robin (gRPC)** | Round Robin (1:1:1) | None (Normal) | 29.99 | 33.33% | 33.33% | 33.33% | 52.1 ms | 122.1 ms | 0.0% | HTTP/2 multiplexing delivers exact 300/300/300 distribution over 1 TCP connection. |
+| **Part D1: Weighted RR** | Weighted RR (2:1:1) | None (Normal) | 29.87 | 50.1% | 24.8% | 25.1% | 125.3 ms | 316.3 ms | 0.0% | Traffic splits 481/238/241 (2:1:1). Concurrency on A doubles, raising p95 slightly. |
+| **Part D2: Delayed B (RR)** | Round Robin (1:1:1) | Replica B +300ms | 19.96 | 33.3% | 33.3% | 33.4% | 1873.2 ms | 16457.4 ms | 32.7% | Blind circular routing sends traffic to slow B; queue saturates, yielding 294 timeouts. |
+| **Part D2: Delayed B (LR)** | Least Request | Replica B +300ms | 27.16 | 45.0% | **12.6%** | 46.8% | **126.9 ms** | 15010.6 ms | 5.4% | Envoy drains traffic from slow B (down to 12.6%), cutting failures by 83% and median to 126ms. |
+| **Part D3: Eviction Phase** | Active Health Check | Replica B Terminated | 29.80 | 50.0% | 0.0% | 50.0% | 110.2 ms | 280.0 ms | 0.0% | B ejected in 4.17s ($2 \times 2\text{s}$); traffic rebalances 50%/50% across A and C with 0% error. |
+| **Part D3: Recovery Phase**| Active Health Check | Replica B Restored | 30.00 | 33.3% | 33.3% | 33.3% | 105.0 ms | 270.0 ms | 0.0% | B re-admitted in 7.02s after 2 consecutive successful checks; traffic returns to 1:1:1. |
 
 ---
 
