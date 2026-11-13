@@ -104,23 +104,21 @@ sequenceDiagram
     Note over App: Injects REPLICA_ID (A, B, or C)<br/>Starts request duration histogram timer
     App->>Svc: create_transfer(db, sender_id, recipient, amount, key=K)
 
-    rect rgb(240, 248, 255)
-        Note over Svc,DB: Atomic Financial Transaction with Row Locking
-        Svc->>DB: SELECT * FROM idempotency_keys WHERE user_id = U AND key = K
-        alt Replayed Request (Key Found)
-            DB-->>Svc: Existing transaction record
-            Svc-->>App: Return cached transfer payload (replayed=True)
-            App-->>Envoy: HTTP 201 Created (Header: Idempotent-Replayed: true)
-        else New Request (Key Not Found)
-            Svc->>DB: SELECT * FROM wallets WHERE id IN (first, second) FOR UPDATE
-            Note over Svc,DB: Wallets locked in deterministic ID order<br/>Eliminates cross-replica deadlocks
-            Svc->>DB: UPDATE wallets SET balance = balance - amount (Sender)
-            Svc->>DB: UPDATE wallets SET balance = balance + amount (Recipient)
-            Svc->>DB: INSERT INTO transactions & idempotency_keys
-            DB-->>Svc: COMMIT transaction
-            Svc-->>App: New transfer entity
-            App-->>Envoy: HTTP 201 Created (Header: X-Replica: A/B/C, Location: /transfers/{id})
-        end
+    Note over Svc,DB: Atomic Financial Transaction with Row Locking
+    Svc->>DB: SELECT * FROM idempotency_keys WHERE user_id = U AND key = K
+    alt Replayed Request (Key Found)
+        DB-->>Svc: Existing transaction record
+        Svc-->>App: Return cached transfer payload (replayed=True)
+        App-->>Envoy: HTTP 201 Created (Header: Idempotent-Replayed: true)
+    else New Request (Key Not Found)
+        Svc->>DB: SELECT * FROM wallets WHERE id IN (first, second) FOR UPDATE
+        Note over Svc,DB: Wallets locked in deterministic ID order<br/>Eliminates cross-replica deadlocks
+        Svc->>DB: UPDATE wallets SET balance = balance - amount (Sender)
+        Svc->>DB: UPDATE wallets SET balance = balance + amount (Recipient)
+        Svc->>DB: INSERT INTO transactions & idempotency_keys
+        DB-->>Svc: COMMIT transaction
+        Svc-->>App: New transfer entity
+        App-->>Envoy: HTTP 201 Created (Header: X-Replica: A/B/C, Location: /transfers/{id})
     end
 
     Envoy-->>Client: HTTP 201 Created Response
