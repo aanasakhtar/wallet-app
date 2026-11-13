@@ -15,11 +15,19 @@ so it can give an AVERAGE but not quantiles. That is why transfer latency
 also has a Histogram (wallet_http_request_duration_seconds) - the histogram
 is what p95/p99 is calculated from. The assignment calls this out explicitly.
 """
+import os
 from prometheus_client import Counter, Gauge, Histogram, Summary
 
 # ---------------------------------------------------------------------------
 # APPLICATION METRICS
 # ---------------------------------------------------------------------------
+
+replica_info = Gauge(
+    "wallet_replica_info",
+    "Information about the replica instance.",
+    ["replica"],
+)
+replica_info.labels(replica=os.getenv("REPLICA_ID", "A")).set(1)
 
 # Labels here are all LOW cardinality on purpose:
 #   endpoint is the route TEMPLATE ("/wallet/balance"), never the raw path,

@@ -4,7 +4,16 @@ import subprocess
 import sys
 
 root = pathlib.Path(__file__).resolve().parent.parent
-tests = ["test_smoke.py", "test_observability.py", "test_api.py", "test_openapi.py", "test_grpc.py", "test_resilient_client.py", "test_grpc_metrics.py"]
+tests = [
+    "test_smoke.py",
+    "test_observability.py",
+    "test_api.py",
+    "test_openapi.py",
+    "test_grpc.py",
+    "test_resilient_client.py",
+    "test_grpc_metrics.py",
+    "test_a3_shared_state.py",
+]
 failed = []
 for t in tests:
     r = subprocess.run([sys.executable, t], cwd=root, capture_output=True, text=True)

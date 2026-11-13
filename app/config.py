@@ -19,6 +19,8 @@ class Settings:
     rate_limit_transfers: str = os.getenv("RATE_LIMIT_TRANSFERS", "20/60")
     # How long an Idempotency-Key is remembered.
     idempotency_ttl_seconds: int = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", str(24 * 3600)))
+    # Assignment 3: Replica identifier (A, B, C)
+    replica_id: str = os.getenv("REPLICA_ID", "A")
 
 
 settings = Settings()

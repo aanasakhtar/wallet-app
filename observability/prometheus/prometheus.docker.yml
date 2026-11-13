@@ -1,9 +1,6 @@
-# Prometheus configuration for the wallet app.
+# Prometheus configuration for the wallet app (Docker Compose).
 #
-# scrape_interval of 5s is deliberately faster than the 15s default: the
-# Part E experiment needs several scrapes inside a short fault window, and
-# the assignment asks that each stage run long enough for several scrapes.
-# In production 15-30s is more typical.
+# scrape_interval of 5s allows rapid metric collection during load experiments.
 
 global:
   scrape_interval: 5s
@@ -13,56 +10,71 @@ global:
 
 scrape_configs:
   # -------------------------------------------------------------------------
-  # The wallet application itself.
-  # `instance` is what identifies the machine/process in Grafana.
+  # Replicas A, B, and C (Assignment 3, Part A & B)
+  # Each runs run_replica.py exposing HTTP, gRPC, and all Prometheus metrics on :8000
+  # -------------------------------------------------------------------------
+  - job_name: wallet-app-a
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["app-a:8000"]
+        labels:
+          service: wallet-app
+          replica: A
+          env: local
+
+  - job_name: wallet-app-b
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["app-b:8000"]
+        labels:
+          service: wallet-app
+          replica: B
+          env: local
+
+  - job_name: wallet-app-c
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["app-c:8000"]
+        labels:
+          service: wallet-app
+          replica: C
+          env: local
+
+  # -------------------------------------------------------------------------
+  # Envoy Proxy (Assignment 3, Part B, C, D)
+  # Scraped on admin port 9901 at /stats/prometheus
+  # -------------------------------------------------------------------------
+  - job_name: envoy
+    metrics_path: /stats/prometheus
+    static_configs:
+      - targets: ["envoy:9901"]
+        labels:
+          service: envoy
+          env: local
+
+  # -------------------------------------------------------------------------
+  # Legacy job definitions for backwards compatibility
   # -------------------------------------------------------------------------
   - job_name: wallet-app
     metrics_path: /metrics
     static_configs:
-      - targets: ["app:8000"]
+      - targets: ["app-a:8000"]
         labels:
           service: wallet-api
           env: local
 
   # -------------------------------------------------------------------------
-  # gRPC service (Assignment 2): its own process, so its own /metrics endpoint.
-  # The shared business code records wallet_transactions_total etc. in THIS process,
-  # so the series carry job="wallet-grpc"; dashboards use sum(...) to combine both jobs.
-  # -------------------------------------------------------------------------
-  - job_name: wallet-grpc
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["grpc:8002"]
-        labels:
-          service: wallet-grpc
-          env: local
-
-  # -------------------------------------------------------------------------
-  # Node Exporter - host CPU, memory, disk and network (Part B requirement).
-  # The machine being measured is whatever host runs node_exporter; the
-  # `nodename` label below should be set to that machine's name in the report.
+  # Node Exporter - host CPU, memory, disk and network
   # -------------------------------------------------------------------------
   - job_name: node-exporter
     static_configs:
       - targets: ["node-exporter:9100"]
         labels:
-          nodename: docker-host # <-- change to your machine's hostname
+          nodename: docker-host
           env: local
 
   # -------------------------------------------------------------------------
-  # Cardinality experiment app (Part E.2). Separate job so the demo's series
-  # can be counted independently of the real app's.
-  # -------------------------------------------------------------------------
-  - job_name: cardinality-demo
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["cardinality-demo:8001"]
-        labels:
-          env: local
-
-  # -------------------------------------------------------------------------
-  # Prometheus scraping itself - useful for showing total series count
-  # (prometheus_tsdb_head_series) during the cardinality experiment.
+  # Prometheus scraping itself
   # -------------------------------------------------------------------------
   - job_name: prometheus
     static_configs:

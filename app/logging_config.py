@@ -34,6 +34,7 @@ from logging.handlers import RotatingFileHandler
 from .middleware.request_context import get_request_id
 
 SERVICE_NAME = os.getenv("SERVICE_NAME", "wallet-api")
+REPLICA_ID = os.getenv("REPLICA_ID", "A")
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 LOG_FILE_NAME = os.getenv("LOG_FILE_NAME", "wallet-app.json")
 LOG_FILE = os.path.join(LOG_DIR, LOG_FILE_NAME)
@@ -54,14 +55,16 @@ _STANDARD_ATTRS = {
 
 
 class JsonFormatter(logging.Formatter):
-    def __init__(self, service: str = None):
+    def __init__(self, service: str = None, replica: str = None):
         super().__init__()
         self.service = service or SERVICE_NAME
+        self.replica = replica or os.getenv("REPLICA_ID", "A")
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
             "@timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "service": self.service,
+            "replica": getattr(record, "replica", self.replica),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -95,14 +98,14 @@ class RequestIdFilter(logging.Filter):
         return True
 
 
-def configure_logging(service_name: str = None, log_file_name: str = None) -> None:
+def configure_logging(service_name: str = None, log_file_name: str = None, replica_id: str = None) -> None:
     """service_name / log_file_name let a second process (the gRPC service) write
     its own file with its own `service` field, instead of two processes rotating
     the same file."""
     os.makedirs(LOG_DIR, exist_ok=True)
     log_file = os.path.join(LOG_DIR, log_file_name) if log_file_name else LOG_FILE
 
-    formatter = JsonFormatter(service_name)
+    formatter = JsonFormatter(service_name, replica_id)
     request_id_filter = RequestIdFilter()
 
     stdout_handler = logging.StreamHandler(sys.stdout)

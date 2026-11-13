@@ -440,3 +440,69 @@ New environment variables: `RATE_LIMIT_ENABLED` (true), `RATE_LIMIT_TRANSFERS` (
 **Breaking changes since Assignment 1** (callers updated): `POST /wallet/topup` → `POST /wallet/topups` (`201`); `POST /transfers` now requires the `Idempotency-Key` header, returns `201`, and uses `404/409/422` instead of a blanket `400`; all errors use `{"error": {code, message, request_id}}`; `scripts/load_test.py` now spreads load over several sender accounts to stay under the rate limit.
 
 New layout: `proto/` (contract) · `generated/` (stubs) · `grpc_service/` (server, handler, interceptor) · `clients/` (gRPC client, resilient HTTP caller) · `openapi/wallet-api.yaml` · `app/errors.py` (shared HTTP+gRPC error table) · `app/validation.py` · `app/rate_limit.py` · `app/services/idempotency_service.py`.
+
+---
+
+# Assignment 3 — Load Balancing & Multi-Replica Observability
+
+Report: **[`docs/A3_REPORT.md`](docs/A3_REPORT.md)** (Parts A, B, C, and D).
+
+Assignment 3 scales the Wallet App horizontally across three identical replicas (`app-a`, `app-b`, `app-c`) fronted by an **Envoy L7 reverse proxy and load balancer**. The system is instrumented with per-replica Prometheus scraping, a comparative Grafana dashboard, Filebeat log ingestion with distributed trace correlation, and evaluated across multiple load-balancing policies (Round Robin, Weighted, Least Request, Active Health Checking).
+
+### Architecture & Port Map
+
+| Component | Port | Description |
+|---|---|---|
+| **Envoy HTTP Front-end** | `10000` | Balanced HTTP entry point (`/wallet/*`, `/transfers*`) |
+| **Envoy gRPC Front-end** | `10001` | Balanced gRPC entry point (`CreateTransfer` over HTTP/2) |
+| **Envoy Admin & Stats** | `9901` | Admin console & Prometheus exporter (`/stats/prometheus`) |
+| **Replica A (HTTP / gRPC)** | `8001` / `50151` | Direct host ports (`8000` / `50051` internal), `REPLICA_ID=A` |
+| **Replica B (HTTP / gRPC)** | `8002` / `50251` | Direct host ports (`8000` / `50051` internal), `REPLICA_ID=B` |
+| **Replica C (HTTP / gRPC)** | `8003` / `50351` | Direct host ports (`8000` / `50051` internal), `REPLICA_ID=C` |
+| **Prometheus** | `9090` | Time-series scraper & TSDB |
+| **Grafana** | `3000` | Per-replica load balancing dashboard (`admin` / `admin`) |
+| **PostgreSQL** | `5432` | Shared transactional source of truth (wallets, ledger, idempotency) |
+
+### Quick Start with Docker Compose
+```bash
+docker compose up --build
+```
+This launches all 3 replicas, PostgreSQL, Envoy (defaulting to Part C equal round-robin), Prometheus, Grafana, and the Elasticsearch/Filebeat logging pipeline.
+
+### Envoy Configuration Variants
+To switch load-balancing policies, copy the desired YAML into `observability/envoy/envoy.yaml` and restart/reload Envoy:
+```bash
+# Part A: Route 100% of traffic exclusively to Replica A
+cp observability/envoy/envoy-part-a.yaml observability/envoy/envoy.yaml
+
+# Part C: Equal-weight round-robin (33% / 33% / 33%) with HTTP/2 stream balancing
+cp observability/envoy/envoy-part-c.yaml observability/envoy/envoy.yaml
+
+# Part D.1: Weighted round-robin (2:1:1 -> 50% A, 25% B, 25% C)
+cp observability/envoy/envoy-part-d-weighted.yaml observability/envoy/envoy.yaml
+
+# Part D.2: Least request load balancing (choice_count: 2)
+cp observability/envoy/envoy-part-d-least-request.yaml observability/envoy/envoy.yaml
+
+# Part D.3: Active health checks (/health, interval: 2s, threshold: 2)
+cp observability/envoy/envoy-part-d-health.yaml observability/envoy/envoy.yaml
+```
+
+### Commands & Tooling
+
+| What | Command |
+|---|---|
+| Run all 8 test suites (189 assertions) | `python scripts/run_tests.py` |
+| Run Assignment 3 shared-state test suite | `python test_a3_shared_state.py` |
+| Fixed-rate async HTTP benchmark | `python scripts/fixed_rate_client.py --interface http --port 10000 --target-rps 30 --duration 30 --endpoint transfer` |
+| Fixed-rate async gRPC benchmark | `python scripts/fixed_rate_client.py --interface grpc --port 10001 --target-rps 30 --duration 30` |
+| Rebuild Assignment 3 Grafana dashboard | `python scripts/build_dashboard_a3.py` |
+| Run replica supervisor natively (Replica A) | `python run_replica.py --replica A --http-port 8000 --grpc-port 50051` |
+
+### New Files in Assignment 3
+- `run_replica.py`: Unified supervisor process running FastAPI, gRPC, and metrics tagged with `REPLICA_ID`.
+- `test_a3_shared_state.py`: Verification of cross-replica idempotency replay, race collisions, and rate-limit partition disparity.
+- `scripts/fixed_rate_client.py`: Open-loop asynchronous workload generator with statistical percentiles ($p50$, $p90$, $p95$, $p99$).
+- `scripts/build_dashboard_a3.py`: Generates the Assignment 3 per-replica Grafana dashboard.
+- `observability/envoy/`: Configuration variants for Parts A, C, and D.
+- `docs/A3_REPORT.md`: Comprehensive 100-mark submission report.

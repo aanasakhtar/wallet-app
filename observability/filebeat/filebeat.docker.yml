@@ -1,12 +1,9 @@
-# Filebeat configuration for the DOCKER COMPOSE setup.
+# Filebeat configuration for the DOCKER COMPOSE setup (Assignment 3).
 #
-# Pipeline: app writes JSON to stdout -> Docker's json-file driver saves it
-# under /var/lib/docker/containers/<id>/<id>-json.log -> Filebeat reads it,
-# unwraps Docker's envelope, decodes our JSON, and ships to Elasticsearch.
-#
-# Docker wraps each line as {"log":"<our json>\n","stream":"stdout","time":...}
-# so there are TWO decode steps: container input unwraps the envelope, then
-# decode_json_fields parses the application payload inside `message`.
+# Pipeline:
+# 1. Container logs (wallet replicas): Docker's json-file driver saves under
+#    /var/lib/docker/containers/<id>/<id>-json.log -> decoded and shipped to Elasticsearch.
+# 2. Envoy access logs: read from mounted /var/log/envoy/access.log as ndjson.
 
 filebeat.inputs:
   - type: container
@@ -15,15 +12,32 @@ filebeat.inputs:
       - /var/lib/docker/containers/*/*.log
     stream: stdout
 
+  - type: filestream
+    id: envoy-access-logs
+    enabled: true
+    paths:
+      - /var/log/envoy/*.log
+    parsers:
+      - ndjson:
+          target: ""
+          overwrite_keys: true
+          add_error_key: true
+
 processors:
-  # Only keep logs from the wallet app container; skip Prometheus, Grafana, etc.
+  # Only keep logs from the wallet app containers and envoy access logs
   - drop_event:
       when:
-        not:
-          contains:
-            container.image.name: wallet
+        and:
+          - not:
+              contains:
+                container.image.name: wallet
+          - not:
+              contains:
+                container.image.name: envoy
+          - not:
+              has_fields: ["upstream_cluster"]
 
-  # Parse the application's JSON payload out of the `message` field.
+  # Parse JSON from application stdout container logs
   - decode_json_fields:
       fields: ["message"]
       target: ""
